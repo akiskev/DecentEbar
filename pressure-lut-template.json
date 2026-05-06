@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "name": "E-Bar pressure LUT template 0-12 bar",
+  "packageName": "com.g472631889.stfbeta",
+  "screenWidth": 3120,
+  "screenHeight": 1440,
+  "orientation": "landscape",
+  "points": [
+    {
+      "pressureBar": 0.0,
+      "x": 2925.0,
+      "y": 1164.0
+    },
+    {
+      "pressureBar": 1.0,
+      "x": 2925.0,
+      "y": 1112.0
+    },
+    {
+      "pressureBar": 2.0,
+      "x": 2925.0,
+      "y": 1061.0
+    },
+    {
+      "pressureBar": 3.0,
+      "x": 2925.0,
+      "y": 1005.0
+    },
+    {
+      "pressureBar": 4.0,
+      "x": 2925.0,
+      "y": 952.0
+    },
+    {
+      "pressureBar": 5.0,
+      "x": 2925.0,
+      "y": 898.0
+    },
+    {
+      "pressureBar": 6.0,
+      "x": 2925.0,
+      "y": 844.0
+    },
+    {
+      "pressureBar": 7.0,
+      "x": 2925.0,
+      "y": 791.0
+    },
+    {
+      "pressureBar": 8.0,
+      "x": 2925.0,
+      "y": 738.0
+    },
+    {
+      "pressureBar": 9.0,
+      "x": 2925.0,
+      "y": 684.0
+    },
+    {
+      "pressureBar": 10.0,
+      "x": 2925.0,
+      "y": 631.0
+    },
+    {
+      "pressureBar": 11.0,
+      "x": 2925.0,
+      "y": 0.0
+    },
+    {
+      "pressureBar": 12.0,
+      "x": 2925.0,
+      "y": 0.0
+    }
+  ]
+}
