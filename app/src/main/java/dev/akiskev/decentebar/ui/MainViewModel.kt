@@ -115,24 +115,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun arm() {
-        val state = _uiState.value
         val service = EbarAccessibilityService.current()
-        val validation = validateLut(state.snapshot, state.loadedLut, requireForegroundPackage = false)
+        if (service == null) {
+            fail("Accessibility service is not enabled", attemptStop = false)
+            return
+        }
+
+        val freshSnapshot = service.captureSnapshot()
+        val state = _uiState.value
+        val validation = validateLut(freshSnapshot, state.loadedLut, requireForegroundPackage = false)
         val profileErrors = profileRepository.validateProfile(state.selectedProfile)
 
         when {
-            service == null -> fail("Accessibility service is not enabled", attemptStop = false)
             !validation.isValid -> fail("Cannot arm: ${validation.displayText}", attemptStop = false)
             profileErrors.isNotEmpty() -> fail("Cannot arm: ${profileErrors.joinToString("; ")}", attemptStop = false)
             else -> {
                 resetShotRuntime()
                 stageStartMs = now()
+                EbarAccessibilityService.setShouldRun(true)
                 _uiState.update {
                     it.copy(
+                        snapshot = freshSnapshot,
+                        lutValidation = validation,
                         controllerState = ControllerState.ARMED,
                         currentStageIndex = 0,
                         currentFlowGps = 0.0,
-                        currentWeightG = null,
+                        currentWeightG = freshSnapshot.weightG,
                         commandedPressureBar = null,
                         elapsedShotTimeMs = 0L,
                         safetyStatus = "Armed; waiting for E-Bar shot screen",
@@ -150,6 +158,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disarm() {
         resetShotRuntime()
+        EbarAccessibilityService.setShouldRun(false)
         _uiState.update {
             it.copy(
                 controllerState = ControllerState.IDLE,
@@ -163,6 +172,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun emergencyStop() {
         val nowMs = now()
+        EbarAccessibilityService.setShouldRun(true)
         sendStop("Emergency stop", nowMs, _uiState.value.currentWeightG, explicitRetry = true)
     }
 
@@ -310,6 +320,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(lutMessage = "Enter a valid pressure") }
             return
         }
+        EbarAccessibilityService.current()?.captureSnapshot()?.let { fresh ->
+            val validation = validateLut(fresh, _uiState.value.loadedLut, requireForegroundPackage = false)
+            _uiState.update { it.copy(snapshot = fresh, lutValidation = validation) }
+        }
         commandPressure(pressure, now(), force = true, source = "Manual LUT test")
     }
 
@@ -317,14 +331,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val nowMs = snapshot.timestampMs.takeIf { it > 0L } ?: now()
         val state = _uiState.value
         val validation = validateLut(snapshot, state.loadedLut, requireForegroundPackage = false)
+        val nextWeight = snapshot.weightG ?: state.currentWeightG
+        val serviceEnabled = EbarAccessibilityService.current() != null
 
-        _uiState.update {
-            it.copy(
-                snapshot = snapshot,
-                serviceEnabled = EbarAccessibilityService.current() != null,
-                lutValidation = validation,
-                currentWeightG = snapshot.weightG ?: it.currentWeightG
-            )
+        val needsUpdate = !snapshotsMaterialEqual(state.snapshot, snapshot) ||
+            state.lutValidation != validation ||
+            state.currentWeightG != nextWeight ||
+            state.serviceEnabled != serviceEnabled
+
+        if (needsUpdate) {
+            _uiState.update {
+                it.copy(
+                    snapshot = snapshot,
+                    serviceEnabled = serviceEnabled,
+                    lutValidation = validation,
+                    currentWeightG = nextWeight
+                )
+            }
         }
 
         when (state.controllerState) {
@@ -336,6 +359,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ControllerState.STAGE_TRANSITION -> handleRunningSnapshot(snapshot, nowMs)
             ControllerState.STOPPING -> handleStoppingSnapshot(snapshot, nowMs)
         }
+    }
+
+    private fun snapshotsMaterialEqual(a: EbarSnapshot, b: EbarSnapshot): Boolean {
+        return a.isForeground == b.isForeground &&
+            a.activePackage == b.activePackage &&
+            a.hasStart == b.hasStart &&
+            a.hasStop == b.hasStop &&
+            a.hasWeigh == b.hasWeigh &&
+            a.hasPressurePriority == b.hasPressurePriority &&
+            a.hasFlowRatePriority == b.hasFlowRatePriority &&
+            a.hasPressureLabel == b.hasPressureLabel &&
+            a.weightG == b.weightG &&
+            a.screenWidth == b.screenWidth &&
+            a.screenHeight == b.screenHeight &&
+            a.orientation == b.orientation &&
+            a.rawDescriptions == b.rawDescriptions &&
+            a.rawTexts == b.rawTexts
     }
 
     private fun handleArmedSnapshot(snapshot: EbarSnapshot, nowMs: Long) {
@@ -648,6 +688,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun finishStopped(nowMs: Long, reason: String) {
         shotStoppedMs = nowMs
+        EbarAccessibilityService.setShouldRun(false)
         _uiState.update {
             it.copy(
                 controllerState = ControllerState.STOPPED,
@@ -668,6 +709,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             recordEvent(ShotEventType.STOP_COMMAND, "Safety stop attempted: $message", weightG = weight)
         }
 
+        EbarAccessibilityService.setShouldRun(false)
         _uiState.update {
             it.copy(
                 controllerState = ControllerState.ERROR,

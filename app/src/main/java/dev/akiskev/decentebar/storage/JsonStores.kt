@@ -23,7 +23,7 @@ class ProfileRepository(context: Context) {
     }
 
     fun saveProfiles(profiles: List<ShotProfile>) {
-        prefs.edit().putString(KEY_PROFILES, json.encodeToString(profiles)).apply()
+        prefs.edit().putString(KEY_PROFILES, json.encodeToString(profiles)).commit()
     }
 
     fun upsert(profile: ShotProfile): List<ShotProfile> {
@@ -131,11 +131,11 @@ class LutRepository(context: Context) {
     }
 
     fun save(lut: PressureLut) {
-        prefs.edit().putString(KEY_LUT, json.encodeToString(lut)).apply()
+        prefs.edit().putString(KEY_LUT, json.encodeToString(lut)).commit()
     }
 
     fun delete() {
-        prefs.edit().remove(KEY_LUT).apply()
+        prefs.edit().remove(KEY_LUT).commit()
     }
 
     fun export(lut: PressureLut): String = json.encodeToString(lut)

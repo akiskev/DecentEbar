@@ -8,6 +8,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.akiskev.decentebar.engine.EbarParser
+import dev.akiskev.decentebar.model.EBAR_PACKAGE_NAME
 import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.SafetyConfig
 import kotlinx.coroutines.CoroutineScope
@@ -23,12 +24,22 @@ import kotlinx.coroutines.launch
 class EbarAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var pollJob: Job? = null
+    private var shouldRunJob: Job? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         _isEnabled.value = true
-        pollJob?.cancel()
+        shouldRunJob?.cancel()
+        shouldRunJob = serviceScope.launch {
+            _shouldRun.collect { active ->
+                if (active) startPolling() else stopPolling()
+            }
+        }
+    }
+
+    private fun startPolling() {
+        if (pollJob?.isActive == true) return
         pollJob = serviceScope.launch {
             while (isActive) {
                 publishSnapshot()
@@ -37,7 +48,13 @@ class EbarAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun stopPolling() {
+        pollJob?.cancel()
+        pollJob = null
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (!_shouldRun.value) return
         publishSnapshot()
     }
 
@@ -45,6 +62,7 @@ class EbarAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         pollJob?.cancel()
+        shouldRunJob?.cancel()
         instance = null
         _isEnabled.value = false
         super.onDestroy()
@@ -65,19 +83,32 @@ class EbarAccessibilityService : AccessibilityService() {
     }
 
     fun publishSnapshot() {
-        val root = rootInActiveWindow
-        if (root == null) {
-            _snapshots.value = EbarSnapshot(timestampMs = now())
-            return
+        _snapshots.value = captureSnapshot()
+    }
+
+    fun captureSnapshot(): EbarSnapshot {
+        val root = rootInActiveWindow ?: return EbarSnapshot(timestampMs = now())
+        val packageName = root.packageName?.toString()
+        val (screenWidth, screenHeight) = screenSize()
+
+        if (packageName != EBAR_PACKAGE_NAME) {
+            return EbarParser.parseSnapshot(
+                activePackage = packageName,
+                rawDescriptions = emptyList(),
+                rawTexts = emptyList(),
+                screenWidth = screenWidth,
+                screenHeight = screenHeight,
+                timestampMs = now(),
+                maxWeightG = SafetyConfig().maxReadableWeightG,
+            )
         }
 
         val descriptions = mutableListOf<String>()
         val texts = mutableListOf<String>()
         collectVisibleNodeValues(root, descriptions, texts)
-        val (screenWidth, screenHeight) = screenSize()
 
-        _snapshots.value = EbarParser.parseSnapshot(
-            activePackage = root.packageName?.toString(),
+        return EbarParser.parseSnapshot(
+            activePackage = packageName,
             rawDescriptions = descriptions.distinct(),
             rawTexts = texts.distinct(),
             screenWidth = screenWidth,
@@ -150,10 +181,16 @@ class EbarAccessibilityService : AccessibilityService() {
         private var instance: EbarAccessibilityService? = null
         private val _isEnabled = MutableStateFlow(false)
         private val _snapshots = MutableStateFlow(EbarSnapshot())
+        private val _shouldRun = MutableStateFlow(false)
 
         val isEnabled: StateFlow<Boolean> = _isEnabled
         val snapshots: StateFlow<EbarSnapshot> = _snapshots
+        val shouldRun: StateFlow<Boolean> = _shouldRun
 
         fun current(): EbarAccessibilityService? = instance
+
+        fun setShouldRun(value: Boolean) {
+            _shouldRun.value = value
+        }
     }
 }

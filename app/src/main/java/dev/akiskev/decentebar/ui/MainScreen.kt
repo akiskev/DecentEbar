@@ -406,6 +406,14 @@ private fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                     }) { Text("Add Stage") }
                 }
             }
+            if (state.profileMessage.isNotBlank()) {
+                Text(
+                    state.profileMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
