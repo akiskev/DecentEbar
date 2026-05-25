@@ -18,6 +18,7 @@ Android AccessibilityService controller for the Decent Espresso E-Bar — automa
 - **Weight parser** — handles `Wt. ... g` formats including split-line and split-node decimals, graph-axis rejection, and max-weight guard
 - **Shot log** — timestamped samples (weight, flow, pressure, stage) and events (state transitions, pressure commands, stops, safety errors), JSON export
 - **Safety** — missing-weight timeout, per-stage max time, accessibility service watchdog, emergency stop with fallback tap coordinates
+- **Service lifecycle** — accessibility polling (~20 Hz) only runs while armed and the E-Bar app is foreground; idle otherwise, so the service has no background overhead when not in use
 
 ## UI
 

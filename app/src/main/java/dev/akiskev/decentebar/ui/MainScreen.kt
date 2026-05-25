@@ -539,7 +539,7 @@ private fun StageEditor(
                     StageType.entries.forEach { type ->
                         FilterChip(
                             selected = stage.type == type,
-                            onClick = { onStageChange(stage.copy(type = type)) },
+                            onClick = { onStageChange(stage.withTypeDefaults(type)) },
                             label = { Text(type.shortName()) }
                         )
                     }
@@ -592,8 +592,8 @@ private fun StageEditor(
                         SliderLongField(
                             label = "Correction interval",
                             value = stage.correctionIntervalMs ?: 500L,
-                            valueRange = 100f..5000f,
-                            steps = 49,
+                            valueRange = 100f..2000f,
+                            steps = 189,
                             unit = "ms",
                             onChange = { onStageChange(stage.copy(correctionIntervalMs = it)) }
                         )
@@ -1294,6 +1294,37 @@ private fun newStage(): ProfileStage {
         exit = ExitCondition(weightGte = 1.0),
         safety = StageSafety()
     )
+}
+
+private fun ProfileStage.withTypeDefaults(newType: StageType): ProfileStage {
+    return when (newType) {
+        StageType.FIXED_PRESSURE -> copy(
+            type = newType,
+            fixedPressureBar = fixedPressureBar ?: 2.0
+        )
+        StageType.FLOW_LIMITED_PRESSURE -> copy(
+            type = newType,
+            pressureCapBar = pressureCapBar ?: 8.5,
+            targetFlowGps = targetFlowGps ?: 1.5,
+            flowDeadbandGps = flowDeadbandGps ?: 0.2,
+            pressureStepBar = pressureStepBar ?: 0.2,
+            correctionIntervalMs = correctionIntervalMs ?: 500L
+        )
+        StageType.WEIGHT_BASED_PRESSURE_RAMP -> copy(
+            type = newType,
+            rampStartPressureBar = rampStartPressureBar ?: 2.0,
+            rampEndPressureBar = rampEndPressureBar ?: 5.0,
+            rampStartWeightG = rampStartWeightG ?: 0.0,
+            rampEndWeightG = rampEndWeightG ?: 36.0
+        )
+        StageType.TIME_BASED_PRESSURE_RAMP -> copy(
+            type = newType,
+            rampStartPressureBar = rampStartPressureBar ?: 2.0,
+            rampEndPressureBar = rampEndPressureBar ?: 8.0,
+            rampDurationMs = rampDurationMs ?: 4_000L
+        )
+        StageType.STOP -> copy(type = newType)
+    }
 }
 
 private fun StageType.shortName(): String {

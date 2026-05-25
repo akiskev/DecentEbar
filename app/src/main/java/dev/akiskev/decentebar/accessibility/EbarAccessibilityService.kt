@@ -175,7 +175,7 @@ class EbarAccessibilityService : AccessibilityService() {
     private fun now(): Long = System.currentTimeMillis()
 
     companion object {
-        private const val POLL_INTERVAL_MS = 250L
+        private const val POLL_INTERVAL_MS = 50L
         private const val TAP_DURATION_MS = 70L
 
         private var instance: EbarAccessibilityService? = null
