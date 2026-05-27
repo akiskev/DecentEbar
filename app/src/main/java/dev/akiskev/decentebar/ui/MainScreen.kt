@@ -1,5 +1,9 @@
 package dev.akiskev.decentebar.ui
 
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -65,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -85,6 +90,8 @@ import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.ShotSample
 import dev.akiskev.decentebar.model.StageSafety
 import dev.akiskev.decentebar.model.StageType
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -258,13 +265,39 @@ private fun ControlScreen(
 
 @Composable
 private fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
+    val context = LocalContext.current
     var editedProfile by remember(state.selectedProfile) { mutableStateOf(state.selectedProfile) }
     var importText by remember { mutableStateOf("") }
     var exportText by remember { mutableStateOf("") }
     var showProfilePanel by remember { mutableStateOf(false) }
+    var pendingProfileJson by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.exportedProfileJson) {
         if (state.exportedProfileJson.isNotBlank()) exportText = state.exportedProfileJson
+    }
+
+    val saveProfileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val json = pendingProfileJson
+        pendingProfileJson = null
+        if (uri == null || json == null) return@rememberLauncherForActivityResult
+        if (writeJsonToUri(context, uri, json)) {
+            viewModel.setProfileMessage("Saved profile to file")
+        } else {
+            viewModel.setProfileMessage("Save failed")
+        }
+    }
+    val loadProfileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = readJsonFromUri(context, uri)
+        if (text != null) {
+            viewModel.importProfileJson(text)
+        } else {
+            viewModel.setProfileMessage("Could not read file")
+        }
     }
 
     Row(
@@ -350,6 +383,15 @@ private fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { viewModel.importProfileJson(importText) }) { Text("Import") }
                             OutlinedButton(onClick = { importText = exportText }) { Text("Use Export") }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                pendingProfileJson = viewModel.selectedProfileJson()
+                                saveProfileLauncher.launch("${sanitizeFilename(state.selectedProfile.name)}.json")
+                            }) { Text("Save to File") }
+                            OutlinedButton(onClick = {
+                                loadProfileLauncher.launch(arrayOf("application/json", "*/*"))
+                            }) { Text("Load from File") }
                         }
                         OutlinedTextField(
                             value = importText,
@@ -773,14 +815,9 @@ private fun SafetyEditor(safety: StageSafety, onSafetyChange: (StageSafety) -> U
 
 @Composable
 private fun LutScreen(state: MainUiState, viewModel: MainViewModel) {
-    var lutJson by remember { mutableStateOf("") }
     var pressureValue by remember { mutableStateOf(8.0) }
     val nearest = state.loadedLut?.nearest(pressureValue)
     val interpolated = state.loadedLut?.interpolated(pressureValue)
-
-    LaunchedEffect(state.exportedLutJson) {
-        if (state.exportedLutJson.isNotBlank()) lutJson = state.exportedLutJson
-    }
 
     val lutMetrics = listOf(
         "Loaded" to (state.loadedLut?.name ?: "No"),
@@ -830,23 +867,19 @@ private fun LutScreen(state: MainUiState, viewModel: MainViewModel) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Button(onClick = { viewModel.testPressure(pressureValue.format(2)) }) { Text("Test Point") }
-                    OutlinedButton(onClick = viewModel::exportLut) { Text("Export") }
-                    OutlinedButton(onClick = viewModel::deleteLut) { Text("Delete") }
+                    OutlinedButton(onClick = viewModel::exportLut) { Text("Export JSON") }
                 }
                 MessageLine(state.lutMessage)
             }
         }
 
         item {
-            Panel("Import / Export JSON") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { viewModel.importLutJson(lutJson) }) { Text("Import LUT") }
-                    OutlinedButton(onClick = { lutJson = state.exportedLutJson }) { Text("Use Export") }
-                }
+            Panel("Export JSON") {
                 OutlinedTextField(
-                    value = lutJson,
-                    onValueChange = { lutJson = it },
-                    label = { Text("LUT JSON") },
+                    value = state.exportedLutJson,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Computed LUT JSON") },
                     minLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -919,6 +952,22 @@ private fun DebugScreen(state: MainUiState) {
 
 @Composable
 private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
+    val context = LocalContext.current
+    var pendingLogJson by remember { mutableStateOf<String?>(null) }
+
+    val saveLogLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val json = pendingLogJson
+        pendingLogJson = null
+        if (uri == null || json == null) return@rememberLauncherForActivityResult
+        if (writeJsonToUri(context, uri, json)) {
+            viewModel.setLogMessage("Saved log to file")
+        } else {
+            viewModel.setLogMessage("Save failed")
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -932,9 +981,17 @@ private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
             Panel("Shot Log") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = viewModel::exportShotLog) { Text("Export Log") }
+                    OutlinedButton(onClick = {
+                        val json = viewModel.currentShotLogJson()
+                        if (json.isBlank()) return@OutlinedButton
+                        pendingLogJson = json
+                        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                        saveLogLauncher.launch("${sanitizeFilename(state.selectedProfile.name)}-$ts.json")
+                    }) { Text("Save to File") }
                     OutlinedButton(onClick = viewModel::resetShotLog) { Text("Clear") }
                 }
                 Text("${state.samples.size} samples | ${state.events.size} events")
+                MessageLine(state.logMessage)
             }
             Panel("Events", modifier = Modifier.weight(1f), fillContent = true) {
                 LazyColumn(Modifier.fillMaxSize()) {
@@ -1033,6 +1090,20 @@ private fun MessageLine(message: String) {
         Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
     }
 }
+
+private fun sanitizeFilename(name: String): String {
+    val cleaned = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+    return cleaned.ifBlank { "untitled" }
+}
+
+private fun writeJsonToUri(context: Context, uri: Uri, content: String): Boolean = runCatching {
+    context.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray()) }
+    true
+}.getOrDefault(false)
+
+private fun readJsonFromUri(context: Context, uri: Uri): String? = runCatching {
+    context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+}.getOrNull()
 
 @Composable
 private fun LabeledSwitch(

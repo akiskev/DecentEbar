@@ -69,7 +69,12 @@ class EbarAccessibilityService : AccessibilityService() {
     }
 
     fun clickStopOrFallback(safetyConfig: SafetyConfig = SafetyConfig()): Boolean {
-        return clickNodeByLabel("Stop") || dispatchTap(safetyConfig.fallbackStopX, safetyConfig.fallbackStopY)
+        if (clickNodeByLabel("Stop")) return true
+        val (w, h) = screenSize()
+        if (w <= 0 || h <= 0) return false
+        val x = (safetyConfig.fallbackStopRx * w).toFloat()
+        val y = (safetyConfig.fallbackStopRy * h).toFloat()
+        return dispatchTap(x, y)
     }
 
     fun clickStart(): Boolean = clickNodeByLabel("Start")

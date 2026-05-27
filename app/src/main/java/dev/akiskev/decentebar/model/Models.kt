@@ -191,10 +191,63 @@ data class SafetyConfig(
     val pressureCommandIntervalMs: Long = 400L,
     val minPressureDeltaBar: Double = 0.15,
     val missingWeightTimeoutMs: Long = 2_000L,
-    val fallbackStopX: Float = 2860f,
-    val fallbackStopY: Float = 119f,
-    val firstDropThresholdG: Double = 0.3
+    val fallbackStopRx: Double = 2860.0 / BuiltInPressureLut.REFERENCE_WIDTH,
+    val fallbackStopRy: Double = 119.0 / BuiltInPressureLut.REFERENCE_HEIGHT,
+    val firstDropThresholdG: Double = 0.1
 )
+
+data class PressureLutPointTemplate(
+    val pressureBar: Double,
+    val rx: Double,
+    val ry: Double
+)
+
+object BuiltInPressureLut {
+    const val NAME = "E-Bar pressure LUT (built-in 0-12 bar)"
+    const val REFERENCE_WIDTH = 3120
+    const val REFERENCE_HEIGHT = 1440
+
+    private fun rx(x: Double) = x / REFERENCE_WIDTH
+    private fun ry(y: Double) = y / REFERENCE_HEIGHT
+
+    val points: List<PressureLutPointTemplate> = listOf(
+        PressureLutPointTemplate(0.0,  rx(2925.0), ry(1164.0)),
+        PressureLutPointTemplate(1.0,  rx(2925.0), ry(1112.0)),
+        PressureLutPointTemplate(2.0,  rx(2925.0), ry(1061.0)),
+        PressureLutPointTemplate(3.0,  rx(2925.0), ry(1005.0)),
+        PressureLutPointTemplate(4.0,  rx(2925.0), ry( 952.0)),
+        PressureLutPointTemplate(5.0,  rx(2925.0), ry( 898.0)),
+        PressureLutPointTemplate(6.0,  rx(2925.0), ry( 844.0)),
+        PressureLutPointTemplate(7.0,  rx(2925.0), ry( 791.0)),
+        PressureLutPointTemplate(8.0,  rx(2925.0), ry( 738.0)),
+        PressureLutPointTemplate(9.0,  rx(2925.0), ry( 684.0)),
+        PressureLutPointTemplate(10.0, rx(2925.0), ry( 631.0)),
+        PressureLutPointTemplate(11.0, rx(2925.0), ry( 590.0)),
+        PressureLutPointTemplate(12.0, rx(2925.0), ry( 550.0))
+    )
+
+    fun buildFor(screenWidth: Int, screenHeight: Int): PressureLut? {
+        if (screenWidth <= 0 || screenHeight <= 0) return null
+        // Ratios are calibrated against the landscape layout (x along the long side,
+        // y along the short side). Normalize so we always emit the landscape LUT,
+        // regardless of how Android currently reports orientation.
+        val longSide = maxOf(screenWidth, screenHeight)
+        val shortSide = minOf(screenWidth, screenHeight)
+        return PressureLut(
+            name = NAME,
+            screenWidth = longSide,
+            screenHeight = shortSide,
+            orientation = "landscape",
+            points = points.map {
+                PressurePoint(
+                    pressureBar = it.pressureBar,
+                    x = (it.rx * longSide).toFloat(),
+                    y = (it.ry * shortSide).toFloat()
+                )
+            }
+        )
+    }
+}
 
 object DefaultProfiles {
     val firstDropFlowFade = ShotProfile(
@@ -207,7 +260,7 @@ object DefaultProfiles {
                 name = "Preinfusion",
                 type = StageType.FIXED_PRESSURE,
                 fixedPressureBar = 2.0,
-                exit = ExitCondition(weightGte = 0.3, stageTimeGteMs = 20_000L),
+                exit = ExitCondition(weightGte = 0.1, stageTimeGteMs = 20_000L),
                 safety = StageSafety(maxStageTimeMs = 20_000L)
             ),
             ProfileStage(

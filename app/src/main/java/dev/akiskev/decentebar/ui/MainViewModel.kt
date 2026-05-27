@@ -1,11 +1,14 @@
 package dev.akiskev.decentebar.ui
 
 import android.app.Application
+import android.os.Build
+import android.view.WindowManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.akiskev.decentebar.accessibility.EbarAccessibilityService
 import dev.akiskev.decentebar.engine.FlowEstimator
 import dev.akiskev.decentebar.engine.PressureLutManager
+import dev.akiskev.decentebar.model.BuiltInPressureLut
 import dev.akiskev.decentebar.model.ControllerState
 import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.EbarSnapshot
@@ -20,9 +23,10 @@ import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.ShotSample
 import dev.akiskev.decentebar.model.StageType
-import dev.akiskev.decentebar.storage.LutRepository
+import dev.akiskev.decentebar.storage.JsonCodec
 import dev.akiskev.decentebar.storage.ProfileRepository
 import dev.akiskev.decentebar.storage.ShotLogCodec
+import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -51,6 +55,7 @@ data class MainUiState(
     val lastSafetyError: String = "--",
     val profileMessage: String = "",
     val lutMessage: String = "",
+    val logMessage: String = "",
     val exportedProfileJson: String = "",
     val exportedLutJson: String = "",
     val exportedLogJson: String = "",
@@ -73,7 +78,6 @@ data class MainUiState(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val safetyConfig = SafetyConfig()
     private val profileRepository = ProfileRepository(application)
-    private val lutRepository = LutRepository(application)
     private val lutManager = PressureLutManager(safetyConfig)
     private val flowEstimator = FlowEstimator(safetyConfig.maxFlowGps)
 
@@ -93,13 +97,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         val profiles = profileRepository.loadProfiles()
         val selected = profiles.firstOrNull() ?: DefaultProfiles.firstDropFlowFade
-        val lut = lutRepository.load()
+        val (initW, initH) = resolveScreenSize()
+        val lut = BuiltInPressureLut.buildFor(initW, initH)
         _uiState.update {
             it.copy(
                 profiles = profiles,
                 selectedProfile = selected,
                 loadedLut = lut,
-                lutValidation = validateLut(it.snapshot, lut, requireForegroundPackage = false)
+                lutValidation = validateLut(it.snapshot, lut, requireForegroundPackage = false),
+                exportedLutJson = ""
             )
         }
 
@@ -188,7 +194,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun exportShotLog() {
+        currentShotLogJson()
+    }
+
+    fun currentShotLogJson(): String {
         val state = _uiState.value
+        if (state.samples.isEmpty() && state.events.isEmpty()) {
+            _uiState.update { it.copy(logMessage = "No shot data to export") }
+            return ""
+        }
         val log = ShotLog(
             profileName = state.selectedProfile.name,
             startedAtMs = shotStartMs,
@@ -196,7 +210,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             samples = state.samples,
             events = state.events
         )
-        _uiState.update { it.copy(exportedLogJson = ShotLogCodec.encode(log)) }
+        val encoded = ShotLogCodec.encode(log)
+        _uiState.update { it.copy(exportedLogJson = encoded) }
+        return encoded
+    }
+
+    fun setProfileMessage(msg: String) {
+        _uiState.update { it.copy(profileMessage = msg) }
+    }
+
+    fun setLogMessage(msg: String) {
+        _uiState.update { it.copy(logMessage = msg) }
     }
 
     fun selectProfile(name: String) {
@@ -249,10 +273,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun exportSelectedProfile() {
+        selectedProfileJson()
+    }
+
+    fun selectedProfileJson(): String {
         val profile = _uiState.value.selectedProfile
+        val encoded = profileRepository.exportProfile(profile)
         _uiState.update {
-            it.copy(exportedProfileJson = profileRepository.exportProfile(profile), profileMessage = "Exported ${profile.name}")
+            it.copy(exportedProfileJson = encoded, profileMessage = "Exported ${profile.name}")
         }
+        return encoded
     }
 
     fun importProfileJson(rawJson: String) {
@@ -273,43 +303,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
     }
 
-    fun importLutJson(rawJson: String) {
-        lutRepository.import(rawJson)
-            .onSuccess { lut ->
-                lutRepository.save(lut)
-                val validation = validateLut(_uiState.value.snapshot, lut, requireForegroundPackage = false)
-                _uiState.update {
-                    it.copy(
-                        loadedLut = lut,
-                        lutValidation = validation,
-                        lutMessage = "Imported ${lut.name}: ${validation.displayText}",
-                        exportedLutJson = lutRepository.export(lut)
-                    )
-                }
-            }
-            .onFailure { error ->
-                _uiState.update { it.copy(lutMessage = "Import failed: ${error.message}") }
-            }
-    }
-
-    fun deleteLut() {
-        lutRepository.delete()
-        _uiState.update {
-            it.copy(
-                loadedLut = null,
-                lutValidation = LutValidationResult.Missing,
-                lutMessage = "Deleted pressure LUT",
-                exportedLutJson = ""
-            )
-        }
-    }
-
     fun exportLut() {
         val lut = _uiState.value.loadedLut
         _uiState.update {
             it.copy(
-                exportedLutJson = lut?.let(lutRepository::export).orEmpty(),
-                lutMessage = if (lut == null) "No LUT loaded" else "Exported ${lut.name}"
+                exportedLutJson = lut?.let { JsonCodec.json.encodeToString(it) }.orEmpty(),
+                lutMessage = if (lut == null) "No LUT (screen size unknown)" else "Exported ${lut.name}"
             )
         }
     }
@@ -330,20 +329,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleSnapshot(snapshot: EbarSnapshot) {
         val nowMs = snapshot.timestampMs.takeIf { it > 0L } ?: now()
         val state = _uiState.value
-        val validation = validateLut(snapshot, state.loadedLut, requireForegroundPackage = false)
+        val nextLut = lutForScreen(snapshot.screenWidth, snapshot.screenHeight, state.loadedLut)
+        val validation = validateLut(snapshot, nextLut, requireForegroundPackage = false)
         val nextWeight = snapshot.weightG ?: state.currentWeightG
         val serviceEnabled = EbarAccessibilityService.current() != null
 
         val needsUpdate = !snapshotsMaterialEqual(state.snapshot, snapshot) ||
             state.lutValidation != validation ||
             state.currentWeightG != nextWeight ||
-            state.serviceEnabled != serviceEnabled
+            state.serviceEnabled != serviceEnabled ||
+            state.loadedLut !== nextLut
 
         if (needsUpdate) {
             _uiState.update {
                 it.copy(
                     snapshot = snapshot,
                     serviceEnabled = serviceEnabled,
+                    loadedLut = nextLut,
                     lutValidation = validation,
                     currentWeightG = nextWeight
                 )
@@ -814,6 +816,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             orientation = snapshot.orientation,
             packageName = snapshot.activePackage
         )
+    }
+
+    private fun lutForScreen(width: Int, height: Int, current: PressureLut?): PressureLut? {
+        if (width <= 0 || height <= 0) return current
+        val longSide = maxOf(width, height)
+        val shortSide = minOf(width, height)
+        if (current != null && current.screenWidth == longSide && current.screenHeight == shortSide) return current
+        return BuiltInPressureLut.buildFor(width, height) ?: current
+    }
+
+    private fun resolveScreenSize(): Pair<Int, Int> {
+        val app = getApplication<Application>()
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val wm = app.getSystemService(WindowManager::class.java)
+            val bounds = wm?.maximumWindowMetrics?.bounds
+            if (bounds != null) bounds.width() to bounds.height() else 0 to 0
+        } else {
+            @Suppress("DEPRECATION")
+            val m = app.resources.displayMetrics
+            m.widthPixels to m.heightPixels
+        }
     }
 
     private fun lerp(start: Double, end: Double, progress: Double): Double {

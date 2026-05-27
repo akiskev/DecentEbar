@@ -3,7 +3,6 @@ package dev.akiskev.decentebar.storage
 import android.content.Context
 import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.ExitMode
-import dev.akiskev.decentebar.model.PressureLut
 import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
@@ -118,38 +117,6 @@ class ProfileRepository(context: Context) {
 
     companion object {
         private const val KEY_PROFILES = "profiles_json"
-    }
-}
-
-class LutRepository(context: Context) {
-    private val prefs = context.getSharedPreferences("pressure_lut", Context.MODE_PRIVATE)
-    private val json = JsonCodec.json
-
-    fun load(): PressureLut? {
-        val stored = prefs.getString(KEY_LUT, null) ?: return null
-        return runCatching { json.decodeFromString<PressureLut>(stored) }.getOrNull()
-    }
-
-    fun save(lut: PressureLut) {
-        prefs.edit().putString(KEY_LUT, json.encodeToString(lut)).commit()
-    }
-
-    fun delete() {
-        prefs.edit().remove(KEY_LUT).commit()
-    }
-
-    fun export(lut: PressureLut): String = json.encodeToString(lut)
-
-    fun import(rawJson: String): Result<PressureLut> {
-        return runCatching {
-            val lut = json.decodeFromString<PressureLut>(rawJson)
-            require(lut.points.isNotEmpty()) { "LUT must include at least one pressure point" }
-            lut
-        }
-    }
-
-    companion object {
-        private const val KEY_LUT = "lut_json"
     }
 }
 
