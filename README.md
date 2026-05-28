@@ -60,3 +60,9 @@ All numeric parameters use a slider with an inline editable text field for preci
 2. On the device, go to **Settings → Accessibility** and enable *Decent E-Bar*.
 3. Select or create a shot profile in the **Profile** tab and tap **Save**. The pressure LUT is built-in and auto-scales to your screen — no import needed.
 4. In the **Control** tab, tap **Arm**, then start a shot in the E-Bar app — the controller takes over automatically.
+
+## License
+
+Source-available under the PolyForm Noncommercial License 1.0.0. Noncommercial use is free, including personal, hobby, research, educational, charitable, government, and public-interest use. Paid or otherwise commercial projects require separate permission from the author.
+
+If you use, copy, modify, or share this software, mention `akiskev <akiskev@gmail.com>` and keep the required notice from [LICENSE](LICENSE) with the software.
