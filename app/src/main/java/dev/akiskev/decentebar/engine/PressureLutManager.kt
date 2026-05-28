@@ -8,7 +8,6 @@ import dev.akiskev.decentebar.model.PressurePoint
 import dev.akiskev.decentebar.model.SafetyConfig
 import dev.akiskev.decentebar.model.ScreenSpec
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 class PressureLutManager(
     private val safetyConfig: SafetyConfig = SafetyConfig()
@@ -58,39 +57,11 @@ class PressureLutManager(
     }
 
     fun nearestPoint(lut: PressureLut, requestedPressureBar: Double): PressurePoint? {
-        return lut.points.minWithOrNull(
-            compareBy<PressurePoint> { abs(it.pressureBar - requestedPressureBar) }
-                .thenBy { it.pressureBar }
-        )
+        return lut.nearestPressurePoint(requestedPressureBar)
     }
 
     fun interpolatedPoint(lut: PressureLut, requestedPressureBar: Double): PressurePoint? {
-        val points = lut.points.sortedBy { it.pressureBar }
-        if (points.isEmpty()) return null
-        if (points.size == 1) return points[0]
-
-        val first = points.first()
-        if (requestedPressureBar <= first.pressureBar) return first
-
-        val last = points.last()
-        if (requestedPressureBar >= last.pressureBar) return last
-
-        for (i in 0 until points.size - 1) {
-            val p0 = points[i]
-            val p1 = points[i + 1]
-            if (requestedPressureBar <= p1.pressureBar) {
-                val range = p1.pressureBar - p0.pressureBar
-                if (range == 0.0) return p0
-
-                val t = (requestedPressureBar - p0.pressureBar) / range
-                return PressurePoint(
-                    pressureBar = requestedPressureBar,
-                    x = (p0.x + t * (p1.x - p0.x)).roundToInt().toFloat(),
-                    y = (p0.y + t * (p1.y - p0.y)).roundToInt().toFloat()
-                )
-            }
-        }
-        return last
+        return lut.interpolatedPressurePoint(requestedPressureBar)
     }
 
     fun requestPressure(
@@ -131,7 +102,7 @@ class PressureLutManager(
             )
         }
 
-        val point = interpolatedPoint(lut, requestedPressureBar)
+        val point = lut.interpolatedPressurePoint(requestedPressureBar)
             ?: return PressureCommandResult(false, "No nearest LUT coordinate found")
 
         lastPressureBar = requestedPressureBar

@@ -9,9 +9,6 @@ object EbarParser {
     private val liveWeightRegex = Regex(
         pattern = """(?i)\bWt\.?\s*(-?\d{1,3})(?:\s*\.\s*(\d{1,2}))?\s*g\b"""
     )
-    private val numberRegex = Regex("""^-?\d{1,3}(?:[.,]\d{1,2})?$""")
-    private val integerRegex = Regex("""^-?\d{1,3}$""")
-    private val decimalPartRegex = Regex("""^\d{1,2}$""")
 
     fun parseSnapshot(
         activePackage: String?,
@@ -130,32 +127,6 @@ object EbarParser {
         }
 
         return numberText.replace(',', '.').toDoubleOrNull()
-    }
-
-    private fun parseNumberTokensold(tokens: List<String>): Double? {
-        val cleaned = tokens.map { it.trim() }.filter { it.isNotBlank() }
-        if (cleaned.size == 1 && numberRegex.matches(cleaned[0])) {
-            return cleaned[0].replace(',', '.').toDoubleOrNull()
-        }
-
-        if (
-            cleaned.size == 3 &&
-            integerRegex.matches(cleaned[0]) &&
-            cleaned[1] == "." &&
-            decimalPartRegex.matches(cleaned[2])
-        ) {
-            return "${cleaned[0]}.${cleaned[2]}".toDoubleOrNull()
-        }
-
-        if (
-            cleaned.size == 2 &&
-            integerRegex.matches(cleaned[0]) &&
-            normalizeControlText(cleaned[1]) == "g"
-        ) {
-            return cleaned[0].toDoubleOrNull()
-        }
-
-        return null
     }
 
     private fun normalizeControlText(value: String): String {

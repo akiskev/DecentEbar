@@ -15,6 +15,7 @@ import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.ExitMode
 import dev.akiskev.decentebar.model.LutValidationResult
 import dev.akiskev.decentebar.model.PressureLut
+import dev.akiskev.decentebar.model.ProfileValidator
 import dev.akiskev.decentebar.model.SafetyConfig
 import dev.akiskev.decentebar.model.ScreenSpec
 import dev.akiskev.decentebar.model.ShotEvent
@@ -35,45 +36,6 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
-
-data class MainUiState(
-    val controllerState: ControllerState = ControllerState.IDLE,
-    val serviceEnabled: Boolean = false,
-    val snapshot: EbarSnapshot = EbarSnapshot(),
-    val profiles: List<ShotProfile> = listOf(DefaultProfiles.flow34),
-    val selectedProfile: ShotProfile = DefaultProfiles.flow34,
-    val loadedLut: PressureLut? = null,
-    val lutValidation: LutValidationResult = LutValidationResult.Missing,
-    val currentWeightG: Double? = null,
-    val currentFlowGps: Double = 0.0,
-    val currentStageIndex: Int = -1,
-    val commandedPressureBar: Double? = null,
-    val elapsedShotTimeMs: Long = 0L,
-    val safetyStatus: String = "Idle",
-    val lastPressureCommand: String = "--",
-    val lastStopCommand: String = "--",
-    val lastSafetyError: String = "--",
-    val profileMessage: String = "",
-    val lutMessage: String = "",
-    val logMessage: String = "",
-    val exportedProfileJson: String = "",
-    val exportedLutJson: String = "",
-    val exportedLogJson: String = "",
-    val samples: List<ShotSample> = emptyList(),
-    val events: List<ShotEvent> = emptyList()
-) {
-    val isArmed: Boolean
-        get() = controllerState == ControllerState.ARMED ||
-            controllerState == ControllerState.RUNNING ||
-            controllerState == ControllerState.STAGE_TRANSITION ||
-            controllerState == ControllerState.STOPPING
-
-    val currentStageName: String
-        get() = selectedProfile.stages.getOrNull(currentStageIndex)?.name ?: "--"
-
-    val stopAtWeightG: Double
-        get() = selectedProfile.targetWeightG - selectedProfile.stopOffsetG
-}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val safetyConfig = SafetyConfig()
@@ -130,7 +92,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val freshSnapshot = service.captureSnapshot()
         val state = _uiState.value
         val validation = validateLut(freshSnapshot, state.loadedLut, requireForegroundPackage = false)
-        val profileErrors = profileRepository.validateProfile(state.selectedProfile)
+        val profileErrors = ProfileValidator.validate(state.selectedProfile)
 
         when {
             !validation.isValid -> fail("Cannot arm: ${validation.displayText}", attemptStop = false)
@@ -231,7 +193,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveProfile(profile: ShotProfile) {
-        val errors = profileRepository.validateProfile(profile)
+        val errors = ProfileValidator.validate(profile)
         if (errors.isNotEmpty()) {
             _uiState.update { it.copy(profileMessage = errors.joinToString("; ")) }
             return

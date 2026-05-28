@@ -1,7 +1,5 @@
 package dev.akiskev.decentebar.ui
 
-import android.content.Context
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -81,12 +79,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.akiskev.decentebar.engine.interpolatedPressurePoint
+import dev.akiskev.decentebar.engine.nearestPressurePoint
 import dev.akiskev.decentebar.model.ControllerState
 import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.ExitCondition
 import dev.akiskev.decentebar.model.ExitMode
-import dev.akiskev.decentebar.model.PressureLut
-import dev.akiskev.decentebar.model.PressurePoint
 import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.ShotEvent
 import dev.akiskev.decentebar.model.ShotProfile
@@ -96,9 +94,10 @@ import dev.akiskev.decentebar.model.StageType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+
+private const val PAYPAL_DONATION_URL =
+    "https://www.paypal.com/donate/?business=akiskev%40gmail.com&item_name=Decent%20E-Bar&currency_code=USD"
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
     CONTROL("Control", Icons.Default.PlayArrow),
@@ -837,8 +836,8 @@ private fun SafetyEditor(safety: StageSafety, onSafetyChange: (StageSafety) -> U
 @Composable
 private fun LutScreen(state: MainUiState, viewModel: MainViewModel) {
     var pressureValue by remember { mutableStateOf(8.0) }
-    val nearest = state.loadedLut?.nearest(pressureValue)
-    val interpolated = state.loadedLut?.interpolated(pressureValue)
+    val nearest = state.loadedLut?.nearestPressurePoint(pressureValue)
+    val interpolated = state.loadedLut?.interpolatedPressurePoint(pressureValue)
 
     val lutMetrics = listOf(
         "Loaded" to (state.loadedLut?.name ?: "No"),
@@ -1159,6 +1158,24 @@ private fun AboutScreen() {
             HorizontalDivider()
         }
         item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Support Development", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Donations help support continued development and testing.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                TextButton(
+                    onClick = { uriHandler.openUri(PAYPAL_DONATION_URL) },
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("Donate with PayPal", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item {
+            HorizontalDivider()
+        }
+        item {
             TextButton(
                 onClick = { uriHandler.openUri("https://akiskev.dev") },
                 contentPadding = PaddingValues(0.dp)
@@ -1179,20 +1196,6 @@ private fun MessageLine(message: String) {
         Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
     }
 }
-
-private fun sanitizeFilename(name: String): String {
-    val cleaned = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
-    return cleaned.ifBlank { "untitled" }
-}
-
-private fun writeJsonToUri(context: Context, uri: Uri, content: String): Boolean = runCatching {
-    context.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray()) }
-    true
-}.getOrDefault(false)
-
-private fun readJsonFromUri(context: Context, uri: Uri): String? = runCatching {
-    context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
-}.getOrNull()
 
 @Composable
 private fun LabeledSwitch(
@@ -1444,105 +1447,3 @@ private fun OptionalSliderLongField(
     }
 }
 
-// — Private helpers —
-
-private fun newStage(): ProfileStage {
-    return ProfileStage(
-        name = "New Stage",
-        type = StageType.FIXED_PRESSURE,
-        fixedPressureBar = 2.0,
-        exit = ExitCondition(weightGte = 1.0),
-        safety = StageSafety()
-    )
-}
-
-private fun ProfileStage.withTypeDefaults(newType: StageType): ProfileStage {
-    return when (newType) {
-        StageType.FIXED_PRESSURE -> copy(
-            type = newType,
-            fixedPressureBar = fixedPressureBar ?: 2.0
-        )
-        StageType.FLOW_LIMITED_PRESSURE -> copy(
-            type = newType,
-            pressureCapBar = pressureCapBar ?: 8.5,
-            targetFlowGps = targetFlowGps ?: 1.5,
-            flowDeadbandGps = flowDeadbandGps ?: 0.2,
-            pressureStepBar = pressureStepBar ?: 0.2,
-            correctionIntervalMs = correctionIntervalMs ?: 500L
-        )
-        StageType.WEIGHT_BASED_PRESSURE_RAMP -> copy(
-            type = newType,
-            rampStartPressureBar = rampStartPressureBar ?: 2.0,
-            rampEndPressureBar = rampEndPressureBar ?: 5.0,
-            rampStartWeightG = rampStartWeightG ?: 0.0,
-            rampEndWeightG = rampEndWeightG ?: 36.0
-        )
-        StageType.TIME_BASED_PRESSURE_RAMP -> copy(
-            type = newType,
-            rampStartPressureBar = rampStartPressureBar ?: 2.0,
-            rampEndPressureBar = rampEndPressureBar ?: 8.0,
-            rampDurationMs = rampDurationMs ?: 4_000L
-        )
-        StageType.STOP -> copy(type = newType)
-    }
-}
-
-private fun StageType.shortName(): String {
-    return when (this) {
-        StageType.FIXED_PRESSURE -> "Fixed"
-        StageType.FLOW_LIMITED_PRESSURE -> "Flow"
-        StageType.WEIGHT_BASED_PRESSURE_RAMP -> "Weight Ramp"
-        StageType.TIME_BASED_PRESSURE_RAMP -> "Time Ramp"
-        StageType.STOP -> "Stop"
-    }
-}
-
-private fun <T> List<T>.replaceAt(index: Int, value: T): List<T> =
-    mapIndexed { i, item -> if (i == index) value else item }
-
-private fun <T> List<T>.removeAt(index: Int): List<T> =
-    filterIndexed { i, _ -> i != index }
-
-private fun <T> List<T>.move(from: Int, to: Int): List<T> {
-    if (from !in indices || to !in indices) return this
-    val mutable = toMutableList()
-    val value = mutable.removeAt(from)
-    mutable.add(to, value)
-    return mutable
-}
-
-private fun PressureLut.nearest(pressure: Double) =
-    points.minByOrNull { abs(it.pressureBar - pressure) }
-
-private fun PressureLut.interpolated(pressure: Double): PressurePoint? {
-    val sorted = points.sortedBy { it.pressureBar }
-    if (sorted.isEmpty()) return null
-    if (sorted.size == 1) return sorted[0]
-    val first = sorted.first()
-    if (pressure <= first.pressureBar) return first
-    val last = sorted.last()
-    if (pressure >= last.pressureBar) return last
-    for (i in 0 until sorted.size - 1) {
-        val p0 = sorted[i]
-        val p1 = sorted[i + 1]
-        if (pressure <= p1.pressureBar) {
-            val range = p1.pressureBar - p0.pressureBar
-            if (range == 0.0) return p0
-            val t = (pressure - p0.pressureBar) / range
-            return PressurePoint(
-                pressureBar = pressure,
-                x = (p0.x + t * (p1.x - p0.x)).roundToInt().toFloat(),
-                y = (p0.y + t * (p1.y - p0.y)).roundToInt().toFloat()
-            )
-        }
-    }
-    return last
-}
-
-private fun yesNo(value: Boolean): String = if (value) "Yes" else "No"
-
-private fun Double.format(decimals: Int): String =
-    String.format(Locale.US, "%.${decimals}f", this)
-
-private fun Float.format(decimals: Int): String =
-    String.format(Locale.US, "%.${decimals}f", this)
