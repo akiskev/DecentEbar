@@ -36,13 +36,14 @@ All numeric parameters use a slider with an inline editable text field for preci
 
 ## Default profile
 
-"First Drop PI + Flow Control + Fade" — five stages:
+**Flow 34** — six stages, target 33 g, max shot time 45 s:
 
-1. **Preinfusion** — 2 bar fixed, exits at first drop (0.1 g) or 20 s
-2. **Ramp** — 2 → 8 bar over 4 s
-3. **Main** — flow-limited at 1.5 g/s, 8.5 bar cap, exits at 28 g
-4. **Fade** — weight ramp 8 → 5 bar from 28 g to 35 g
-5. **Stop**
+1. **Preinfusion** — 7 bar fixed, exits on first drop or after 15 s
+2. **Wait** — 0 bar (pump off), exits when weight ≥ 6 g or after 5 s
+3. **Ramp** — 0 → 9 bar over 1.5 s
+4. **Main** — flow-limited at 1.9 g/s, 9 bar cap, exits at 27 g
+5. **Fade** — flow-limited at 1.6 g/s, 8 bar cap, pressure ramps 8 → 5 bar from 28 g to 35 g, exits at 32 g
+6. **Stop**
 
 ## Build
 
