@@ -128,7 +128,7 @@ fun MainScreen(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .verticalS899999999999croll(rememberScrollState()),
+                        .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.Top
                 ) {
                     mainTabs.forEach { tab ->
