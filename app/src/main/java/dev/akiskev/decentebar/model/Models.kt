@@ -250,45 +250,59 @@ object BuiltInPressureLut {
 }
 
 object DefaultProfiles {
-    val firstDropFlowFade = ShotProfile(
-        name = "First Drop PI + Flow Control + Fade",
-        targetWeightG = 36.0,
+    val flow34 = ShotProfile(
+        name = "Flow 34",
+        targetWeightG = 33.0,
         stopOffsetG = 1.2,
         maxShotTimeMs = 45_000L,
         stages = listOf(
             ProfileStage(
                 name = "Preinfusion",
                 type = StageType.FIXED_PRESSURE,
-                fixedPressureBar = 2.0,
-                exit = ExitCondition(weightGte = 0.1, stageTimeGteMs = 20_000L),
-                safety = StageSafety(maxStageTimeMs = 20_000L)
+                fixedPressureBar = 7.0,
+                exit = ExitCondition(stageTimeGteMs = 15_000L, firstDropDetected = true),
+                safety = StageSafety()
+            ),
+            ProfileStage(
+                name = "Wait",
+                type = StageType.FIXED_PRESSURE,
+                fixedPressureBar = 0.0,
+                exit = ExitCondition(weightGte = 6.0, stageTimeGteMs = 5_000L),
+                safety = StageSafety()
             ),
             ProfileStage(
                 name = "Ramp",
                 type = StageType.TIME_BASED_PRESSURE_RAMP,
-                rampStartPressureBar = 2.0,
-                rampEndPressureBar = 8.0,
-                rampDurationMs = 4_000L,
-                exit = ExitCondition(stageTimeGteMs = 4_000L),
-                safety = StageSafety(maxStageTimeMs = 4_500L)
+                rampStartPressureBar = 0.0,
+                rampEndPressureBar = 9.0,
+                rampDurationMs = 1_500L,
+                exit = ExitCondition(stageTimeGteMs = 1_500L),
+                safety = StageSafety()
             ),
             ProfileStage(
                 name = "Main",
                 type = StageType.FLOW_LIMITED_PRESSURE,
-                pressureCapBar = 8.5,
-                targetFlowGps = 1.5,
-                flowDeadbandGps = 0.2,
+                pressureCapBar = 9.0,
+                targetFlowGps = 1.9,
+                flowDeadbandGps = 0.1,
                 pressureStepBar = 0.2,
-                correctionIntervalMs = 500L,
-                exit = ExitCondition(weightGte = 28.0)
+                correctionIntervalMs = 200L,
+                exit = ExitCondition(weightGte = 27.0),
+                safety = StageSafety(maxStageTimeMs = 35_000L)
             ),
             ProfileStage(
                 name = "Fade",
-                type = StageType.WEIGHT_BASED_PRESSURE_RAMP,
+                type = StageType.FLOW_LIMITED_PRESSURE,
+                pressureCapBar = 8.0,
+                targetFlowGps = 1.6,
+                flowDeadbandGps = 0.1,
+                pressureStepBar = 0.2,
+                correctionIntervalMs = 100L,
                 rampEndPressureBar = 5.0,
                 rampStartWeightG = 28.0,
                 rampEndWeightG = 35.0,
-                exit = ExitCondition(weightGte = 35.0)
+                exit = ExitCondition(weightGte = 32.0),
+                safety = StageSafety()
             ),
             ProfileStage(
                 name = "Stop",

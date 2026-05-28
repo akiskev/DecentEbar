@@ -40,8 +40,8 @@ data class MainUiState(
     val controllerState: ControllerState = ControllerState.IDLE,
     val serviceEnabled: Boolean = false,
     val snapshot: EbarSnapshot = EbarSnapshot(),
-    val profiles: List<ShotProfile> = listOf(DefaultProfiles.firstDropFlowFade),
-    val selectedProfile: ShotProfile = DefaultProfiles.firstDropFlowFade,
+    val profiles: List<ShotProfile> = listOf(DefaultProfiles.flow34),
+    val selectedProfile: ShotProfile = DefaultProfiles.flow34,
     val loadedLut: PressureLut? = null,
     val lutValidation: LutValidationResult = LutValidationResult.Missing,
     val currentWeightG: Double? = null,
@@ -96,7 +96,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val profiles = profileRepository.loadProfiles()
-        val selected = profiles.firstOrNull() ?: DefaultProfiles.firstDropFlowFade
+        val selected = profiles.firstOrNull() ?: DefaultProfiles.flow34
         val (initW, initH) = resolveScreenSize()
         val lut = BuiltInPressureLut.buildFor(initW, initH)
         _uiState.update {

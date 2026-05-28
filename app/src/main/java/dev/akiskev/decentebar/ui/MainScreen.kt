@@ -25,10 +25,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -70,6 +72,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -102,7 +105,8 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
     PROFILE("Profile", Icons.Default.Tune),
     LUT("LUT", Icons.Default.TableChart),
     DEBUG("Debug", Icons.Default.BugReport),
-    LOG("Log", Icons.Default.Assessment)
+    LOG("Log", Icons.Default.Assessment),
+    ABOUT("About", Icons.Default.Info)
 }
 
 @Composable
@@ -120,14 +124,28 @@ fun MainScreen(
                 .padding(padding)
         ) {
             NavigationRail {
-                AppTab.entries.forEach { tab ->
-                    NavigationRailItem(
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
-                        selected = selectedTab == tab,
-                        onClick = { selectedTab = tab }
-                    )
+                val mainTabs = AppTab.entries.filter { it != AppTab.ABOUT }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalS899999999999croll(rememberScrollState()),
+                    verticalArrangement = Arrangement.Top
+                ) {
+                    mainTabs.forEach { tab ->
+                        NavigationRailItem(
+                            icon = { Icon(tab.icon, contentDescription = tab.label) },
+                            label = { Text(tab.label) },
+                            selected = selectedTab == tab,
+                            onClick = { selectedTab = tab }
+                        )
+                    }
                 }
+                NavigationRailItem(
+                    icon = { Icon(AppTab.ABOUT.icon, contentDescription = AppTab.ABOUT.label) },
+                    label = { Text(AppTab.ABOUT.label) },
+                    selected = selectedTab == AppTab.ABOUT,
+                    onClick = { selectedTab = AppTab.ABOUT }
+                )
             }
             VerticalDivider()
             Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -138,6 +156,7 @@ fun MainScreen(
                     AppTab.LUT -> LutScreen(state, viewModel)
                     AppTab.DEBUG -> DebugScreen(state)
                     AppTab.LOG -> LogScreen(state, viewModel)
+                    AppTab.ABOUT -> AboutScreen()
                 }
             }
         }
@@ -335,7 +354,7 @@ private fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                             OutlinedButton(onClick = viewModel::exportSelectedProfile) { Text("Export") }
                         }
                         OutlinedButton(
-                            onClick = { editedProfile = DefaultProfiles.firstDropFlowFade.copy(name = "New Profile") },
+                            onClick = { editedProfile = DefaultProfiles.flow34.copy(name = "New Profile") },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("New Profile") }
                         MessageLine(state.profileMessage)
@@ -507,9 +526,11 @@ private fun StageEditor(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
+    val cardColor = if (index % 2 == 0) MaterialTheme.colorScheme.surfaceContainer
+                    else MaterialTheme.colorScheme.surfaceContainerHigh
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.elevatedCardColors(containerColor = cardColor),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)
     ) {
         // Always-visible header
@@ -1080,6 +1101,74 @@ private fun MetricCell(label: String, value: String, modifier: Modifier = Modifi
         Column(Modifier.padding(10.dp)) {
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun AboutScreen() {
+    val uriHandler = LocalUriHandler.current
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Decent E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("v0.1.0-beta", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Automates espresso pressure profiling on the Decent E-Bar by reading live weight and flow via Android Accessibility and dispatching precise tap gestures on the pressure slider.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+        item {
+            HorizontalDivider()
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Safety", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.error)
+                Text(
+                    "This app dispatches real gestures to live hardware. Always keep the E-Bar within reach. Use E-Stop or Disarm immediately if the shot behaves unexpectedly. Never leave an armed session unattended.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+        item {
+            HorizontalDivider()
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Feedback & Support", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "This is a beta release. Bugs, unexpected behaviour, and profile sharing are all welcome — please include an exported shot log when reporting issues.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                TextButton(
+                    onClick = { uriHandler.openUri("mailto:akiskev@gmail.com?subject=Decent%20E-Bar%20Feedback") },
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("akiskev@gmail.com", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        item {
+            HorizontalDivider()
+        }
+        item {
+            TextButton(
+                onClick = { uriHandler.openUri("https://akiskev.dev") },
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    "akiskev.dev",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

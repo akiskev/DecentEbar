@@ -15,10 +15,10 @@ class ProfileRepository(context: Context) {
     private val json = JsonCodec.json
 
     fun loadProfiles(): List<ShotProfile> {
-        val stored = prefs.getString(KEY_PROFILES, null) ?: return listOf(DefaultProfiles.firstDropFlowFade)
+        val stored = prefs.getString(KEY_PROFILES, null) ?: return listOf(DefaultProfiles.flow34)
         return runCatching { json.decodeFromString<List<ShotProfile>>(stored) }
-            .getOrDefault(listOf(DefaultProfiles.firstDropFlowFade))
-            .ifEmpty { listOf(DefaultProfiles.firstDropFlowFade) }
+            .getOrDefault(listOf(DefaultProfiles.flow34))
+            .ifEmpty { listOf(DefaultProfiles.flow34) }
     }
 
     fun saveProfiles(profiles: List<ShotProfile>) {
@@ -35,7 +35,7 @@ class ProfileRepository(context: Context) {
 
     fun delete(profileName: String): List<ShotProfile> {
         val next = loadProfiles().filterNot { it.name == profileName }
-            .ifEmpty { listOf(DefaultProfiles.firstDropFlowFade) }
+            .ifEmpty { listOf(DefaultProfiles.flow34) }
         saveProfiles(next)
         return next
     }
