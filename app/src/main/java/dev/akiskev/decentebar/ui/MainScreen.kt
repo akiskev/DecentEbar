@@ -88,6 +88,8 @@ import dev.akiskev.decentebar.model.ExitMode
 import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.ShotEvent
 import dev.akiskev.decentebar.model.ShotProfile
+import dev.akiskev.decentebar.storage.ShotHtmlExporter
+import dev.akiskev.decentebar.storage.ShotVideoExporter
 import dev.akiskev.decentebar.model.ShotSample
 import dev.akiskev.decentebar.model.StageSafety
 import dev.akiskev.decentebar.model.StageType
@@ -651,14 +653,7 @@ private fun StageEditor(
                             unit = "bar",
                             onChange = { onStageChange(stage.copy(pressureStepBar = it)) }
                         )
-                        SliderLongField(
-                            label = "Correction interval",
-                            value = stage.correctionIntervalMs ?: 500L,
-                            valueRange = 100f..2000f,
-                            steps = 189,
-                            unit = "ms",
-                            onChange = { onStageChange(stage.copy(correctionIntervalMs = it)) }
-                        )
+
                     }
                     StageType.WEIGHT_BASED_PRESSURE_RAMP -> {
                         SliderField(
@@ -974,18 +969,53 @@ private fun DebugScreen(state: MainUiState) {
 private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
     val context = LocalContext.current
     var pendingLogJson by remember { mutableStateOf<String?>(null) }
+    var pendingLogHtml by remember { mutableStateOf<String?>(null) }
+    var pendingFilenameBase by remember { mutableStateOf("") }
+
+    val saveHtmlLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/html")
+    ) { uri ->
+        val html = pendingLogHtml ?: return@rememberLauncherForActivityResult
+        pendingLogHtml = null
+        if (uri == null) {
+            viewModel.setLogMessage("Saved JSON (HTML skipped)")
+            return@rememberLauncherForActivityResult
+        }
+        if (writeJsonToUri(context, uri, html)) {
+            viewModel.setLogMessage("Saved JSON + HTML report")
+        } else {
+            viewModel.setLogMessage("Saved JSON, HTML write failed")
+        }
+    }
 
     val saveLogLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
-        val json = pendingLogJson
+        val json = pendingLogJson ?: return@rememberLauncherForActivityResult
         pendingLogJson = null
-        if (uri == null || json == null) return@rememberLauncherForActivityResult
-        if (writeJsonToUri(context, uri, json)) {
-            viewModel.setLogMessage("Saved log to file")
-        } else {
+        if (uri == null) { pendingLogHtml = null; return@rememberLauncherForActivityResult }
+        if (!writeJsonToUri(context, uri, json)) {
             viewModel.setLogMessage("Save failed")
+            pendingLogHtml = null
+            return@rememberLauncherForActivityResult
         }
+        val html = pendingLogHtml
+        if (html != null) {
+            saveHtmlLauncher.launch("$pendingFilenameBase.html")
+        } else {
+            viewModel.setLogMessage("Saved log to file")
+        }
+    }
+
+    var pendingVideoFormat by remember { mutableStateOf<ShotVideoExporter.Format?>(null) }
+
+    val saveVideoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("video/mp4")
+    ) { uri ->
+        val fmt = pendingVideoFormat ?: return@rememberLauncherForActivityResult
+        pendingVideoFormat = null
+        if (uri == null) return@rememberLauncherForActivityResult
+        viewModel.exportShotVideo(uri, fmt)
     }
 
     Row(
@@ -1002,14 +1032,29 @@ private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = viewModel::exportShotLog) { Text("Export Log") }
                     OutlinedButton(onClick = {
+                        val log = viewModel.currentShotLog() ?: return@OutlinedButton
                         val json = viewModel.currentShotLogJson()
                         if (json.isBlank()) return@OutlinedButton
-                        pendingLogJson = json
                         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-                        saveLogLauncher.launch("${sanitizeFilename(state.selectedProfile.name)}-$ts.json")
+                        val base = "${sanitizeFilename(state.selectedProfile.name)}-$ts"
+                        pendingLogJson = json
+                        pendingLogHtml = ShotHtmlExporter.export(log)
+                        pendingFilenameBase = base
+                        saveLogLauncher.launch("$base.json")
                     }) { Text("Save to File") }
                     OutlinedButton(onClick = viewModel::resetShotLog) { Text("Clear") }
                 }
+                Spacer(Modifier.height(4.dp))
+                VideoExportRow(
+                    progress = state.videoExportProgress,
+                    hasData = state.samples.isNotEmpty(),
+                    onExport = { fmt ->
+                        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                        val base = "${sanitizeFilename(state.selectedProfile.name)}-$ts"
+                        pendingVideoFormat = fmt
+                        saveVideoLauncher.launch("$base.mp4")
+                    }
+                )
                 Text("${state.samples.size} samples | ${state.events.size} events")
                 MessageLine(state.logMessage)
             }
@@ -1040,6 +1085,45 @@ private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                     minLines = 5,
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoExportRow(
+    progress: Float?,
+    hasData: Boolean,
+    onExport: (ShotVideoExporter.Format) -> Unit
+) {
+    var selectedFormat by remember { mutableStateOf(ShotVideoExporter.Format.LANDSCAPE) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ShotVideoExporter.Format.entries.forEach { fmt ->
+                FilterChip(
+                    selected = selectedFormat == fmt,
+                    onClick = { selectedFormat = fmt },
+                    label = { Text(fmt.label, style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = { onExport(selectedFormat) },
+                enabled = hasData && progress == null
+            ) {
+                Text("Save Video")
+            }
+            if (progress != null) {
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.weight(1f)
+                )
+                Text("${(progress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

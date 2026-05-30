@@ -27,7 +27,7 @@ internal fun ProfileStage.withTypeDefaults(newType: StageType): ProfileStage {
             targetFlowGps = targetFlowGps ?: 1.5,
             flowDeadbandGps = flowDeadbandGps ?: 0.2,
             pressureStepBar = pressureStepBar ?: 0.2,
-            correctionIntervalMs = correctionIntervalMs ?: 500L
+            correctionIntervalMs = correctionIntervalMs ?: 600L
         )
         StageType.WEIGHT_BASED_PRESSURE_RAMP -> copy(
             type = newType,

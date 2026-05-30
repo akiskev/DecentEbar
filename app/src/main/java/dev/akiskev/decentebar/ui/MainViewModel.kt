@@ -24,15 +24,19 @@ import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.ShotSample
 import dev.akiskev.decentebar.model.StageType
+import android.net.Uri
 import dev.akiskev.decentebar.storage.JsonCodec
 import dev.akiskev.decentebar.storage.ProfileRepository
 import dev.akiskev.decentebar.storage.ShotLogCodec
+import dev.akiskev.decentebar.storage.ShotVideoExporter
 import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -55,6 +59,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var manualSkipRequested = false
     private var firstDropConsecutiveReadings = 0
     private var firstDropDetected = false
+    private var flowCapWarningLoggedForCurrentStage = false
+    private var lastFlowCorrectionMs: Long? = null
 
     init {
         val profiles = profileRepository.loadProfiles()
@@ -159,22 +165,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentShotLogJson()
     }
 
-    fun currentShotLogJson(): String {
+    fun currentShotLog(): ShotLog? {
         val state = _uiState.value
-        if (state.samples.isEmpty() && state.events.isEmpty()) {
-            _uiState.update { it.copy(logMessage = "No shot data to export") }
-            return ""
-        }
-        val log = ShotLog(
+        if (state.samples.isEmpty() && state.events.isEmpty()) return null
+        return ShotLog(
             profileName = state.selectedProfile.name,
             startedAtMs = shotStartMs,
             stoppedAtMs = shotStoppedMs,
             samples = state.samples,
             events = state.events
         )
+    }
+
+    fun currentShotLogJson(): String {
+        val log = currentShotLog() ?: run {
+            _uiState.update { it.copy(logMessage = "No shot data to export") }
+            return ""
+        }
         val encoded = ShotLogCodec.encode(log)
         _uiState.update { it.copy(exportedLogJson = encoded) }
         return encoded
+    }
+
+    fun exportShotVideo(uri: Uri, format: ShotVideoExporter.Format) {
+        val log = currentShotLog() ?: run {
+            _uiState.update { it.copy(logMessage = "No shot data to export") }
+            return
+        }
+        _uiState.update { it.copy(videoExportProgress = 0f) }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    ShotVideoExporter.export(
+                        context = getApplication(),
+                        log = log,
+                        outputUri = uri,
+                        format = format,
+                        onProgress = { p ->
+                            _uiState.update { it.copy(videoExportProgress = p) }
+                        }
+                    )
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    videoExportProgress = null,
+                    logMessage = if (result.isSuccess) "Video saved" else "Video export failed: ${result.exceptionOrNull()?.message}"
+                )
+            }
+        }
     }
 
     fun setProfileMessage(msg: String) {
@@ -490,8 +529,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        if (shouldExitStage(nowMs, weight, flow, safetyTimeout)) {
-            advanceStage(nowMs, weight)
+        val reason = exitReason(nowMs, weight, flow, safetyTimeout)
+        if (reason != null) {
+            advanceStage(nowMs, weight, reason)
         }
     }
 
@@ -503,48 +543,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val step = stage.pressureStepBar ?: 0.0
         val cap = min(stage.pressureCapBar ?: safetyConfig.maxPressureBar, safetyConfig.maxPressureBar)
         val currentPressure = state.commandedPressureBar ?: min(cap, stageEntryPressureBar ?: cap)
-        val nextPressure = when {
-            flow > target + deadband -> currentPressure - step
-            flow < target - deadband -> currentPressure + step
-            else -> currentPressure
-        }.coerceIn(safetyConfig.minPressureBar, cap)
 
-        if (nextPressure != currentPressure || state.commandedPressureBar == null) {
-            commandPressure(nextPressure, nowMs, source = stageName)
+        val intervalMs = stage.correctionIntervalMs ?: safetyConfig.pressureCommandIntervalMs
+        val lastCorrection = lastFlowCorrectionMs
+        val dueForCorrection = lastCorrection == null || (nowMs - lastCorrection) >= intervalMs
+
+        if (dueForCorrection) {
+            val nextPressure = when {
+                flow > target + deadband -> currentPressure - step
+                flow < target - deadband -> currentPressure + step
+                else -> currentPressure
+            }.coerceIn(safetyConfig.minPressureBar, cap)
+
+            if (nextPressure != currentPressure || state.commandedPressureBar == null) {
+                commandPressure(nextPressure, nowMs, source = stageName)
+                lastFlowCorrectionMs = nowMs
+            }
+
+            if (!flowCapWarningLoggedForCurrentStage && nextPressure >= cap && flow < target - deadband) {
+                flowCapWarningLoggedForCurrentStage = true
+                recordEvent(
+                    ShotEventType.INFO,
+                    "$stageName: flow ${flow.format(2)} g/s below target ${target.format(2)} g/s — pressure capped at ${cap.format(2)} bar"
+                )
+            }
         }
     }
 
-    private fun shouldExitStage(nowMs: Long, weight: Double, flow: Double, safetyTimeout: Boolean): Boolean {
+    private fun exitReason(nowMs: Long, weight: Double, flow: Double, safetyTimeout: Boolean): String? {
         val state = _uiState.value
-        val stage = state.selectedProfile.stages.getOrNull(state.currentStageIndex) ?: return true
+        val stage = state.selectedProfile.stages.getOrNull(state.currentStageIndex) ?: return "no stage"
         val stageElapsedMs = nowMs - (stageStartMs ?: nowMs)
         val exit = stage.exit
-        val conditions = buildList {
-            exit.weightGte?.let { add(weight >= it) }
-            exit.stageTimeGteMs?.let { add(stageElapsedMs >= it) }
-            exit.flowGte?.let { add(flow >= it) }
-            exit.flowLte?.let { add(flow <= it) }
-            if (exit.firstDropDetected) add(firstDropDetected)
-            if (exit.manualSkip || manualSkipRequested) add(manualSkipRequested)
-            if (exit.safetyTimeout || safetyTimeout) add(safetyTimeout || manualSkipRequested)
+
+        data class Cond(val triggered: Boolean, val reason: String)
+
+        val conditions = buildList<Cond> {
+            exit.weightGte?.let { add(Cond(weight >= it, "weight ${weight.format(1)}g ≥ ${it.format(1)}g")) }
+            exit.stageTimeGteMs?.let { ms -> add(Cond(stageElapsedMs >= ms, "time limit ${ms}ms reached")) }
+            exit.flowGte?.let { add(Cond(flow >= it, "flow ${flow.format(2)} g/s ≥ ${it.format(2)} g/s")) }
+            exit.flowLte?.let { add(Cond(flow <= it, "flow ${flow.format(2)} g/s ≤ ${it.format(2)} g/s")) }
+            if (exit.firstDropDetected) add(Cond(firstDropDetected, "first drop detected"))
+            if (exit.manualSkip || manualSkipRequested) add(Cond(manualSkipRequested, "manual skip"))
+            if (exit.safetyTimeout || safetyTimeout) add(Cond(safetyTimeout || manualSkipRequested, "safety timeout"))
         }
 
-        if (conditions.isEmpty()) return false
+        if (conditions.isEmpty()) return null
         return when (exit.mode) {
-            ExitMode.ANY -> conditions.any { it }
-            ExitMode.ALL -> conditions.all { it }
+            ExitMode.ANY -> conditions.firstOrNull { it.triggered }?.reason
+            ExitMode.ALL -> if (conditions.all { it.triggered }) conditions.joinToString(", ") { it.reason } else null
         }
     }
 
-    private fun advanceStage(nowMs: Long, weight: Double) {
+    private fun advanceStage(nowMs: Long, weight: Double, exitReason: String) {
         val state = _uiState.value
         val profile = state.selectedProfile
         val previousStage = profile.stages.getOrNull(state.currentStageIndex)
         val nextIndex = state.currentStageIndex + 1
 
+        flowCapWarningLoggedForCurrentStage = false
+        lastFlowCorrectionMs = null
         recordEvent(
             ShotEventType.STAGE_EXIT,
-            "Exit ${previousStage?.name ?: "stage"} at ${weight.format(1)} g",
+            "Exit ${previousStage?.name ?: "stage"} — $exitReason at ${weight.format(1)}g",
             weightG = weight
         )
 
@@ -750,6 +811,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         manualSkipRequested = false
         firstDropConsecutiveReadings = 0
         firstDropDetected = false
+        flowCapWarningLoggedForCurrentStage = false
+        lastFlowCorrectionMs = null
         flowEstimator.reset()
         lutManager.resetThrottle()
     }

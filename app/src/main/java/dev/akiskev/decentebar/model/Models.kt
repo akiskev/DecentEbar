@@ -286,7 +286,7 @@ object DefaultProfiles {
                 targetFlowGps = 1.9,
                 flowDeadbandGps = 0.1,
                 pressureStepBar = 0.2,
-                correctionIntervalMs = 200L,
+                correctionIntervalMs = 600L,
                 exit = ExitCondition(weightGte = 27.0),
                 safety = StageSafety(maxStageTimeMs = 35_000L)
             ),
@@ -297,7 +297,7 @@ object DefaultProfiles {
                 targetFlowGps = 1.6,
                 flowDeadbandGps = 0.1,
                 pressureStepBar = 0.2,
-                correctionIntervalMs = 100L,
+                correctionIntervalMs = 600L,
                 rampEndPressureBar = 5.0,
                 rampStartWeightG = 28.0,
                 rampEndWeightG = 35.0,
