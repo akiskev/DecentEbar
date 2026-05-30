@@ -79,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.akiskev.decentebar.ble.ScaleConnectionState
 import dev.akiskev.decentebar.engine.interpolatedPressurePoint
 import dev.akiskev.decentebar.engine.nearestPressurePoint
 import dev.akiskev.decentebar.model.ControllerState
@@ -113,7 +114,9 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
-    openAccessibilitySettings: () -> Unit
+    openAccessibilitySettings: () -> Unit,
+    connectToScale: () -> Unit = {},
+    disconnectScale: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableStateOf(AppTab.CONTROL) }
@@ -152,7 +155,7 @@ fun MainScreen(
             Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 Header(state)
                 when (selectedTab) {
-                    AppTab.CONTROL -> ControlScreen(state, viewModel, openAccessibilitySettings)
+                    AppTab.CONTROL -> ControlScreen(state, viewModel, openAccessibilitySettings, connectToScale, disconnectScale)
                     AppTab.PROFILE -> ProfileScreen(state, viewModel)
                     AppTab.LUT -> LutScreen(state, viewModel)
                     AppTab.DEBUG -> DebugScreen(state)
@@ -218,8 +221,21 @@ private fun StatusBadge(controllerState: ControllerState) {
 private fun ControlScreen(
     state: MainUiState,
     viewModel: MainViewModel,
-    openAccessibilitySettings: () -> Unit
+    openAccessibilitySettings: () -> Unit,
+    connectToScale: () -> Unit = {},
+    disconnectScale: () -> Unit = {}
 ) {
+    val scaleLabel = when (state.scaleConnectionState) {
+        ScaleConnectionState.DISCONNECTED -> "Scale"
+        ScaleConnectionState.SCANNING -> "Scanning…"
+        ScaleConnectionState.CONNECTING -> "Connecting…"
+        ScaleConnectionState.CONNECTED -> "Scale ●"
+        ScaleConnectionState.ERROR -> "Scale ✕"
+    }
+    val scaleConnected = state.scaleConnectionState == ScaleConnectionState.CONNECTED
+    val scaleBusy = state.scaleConnectionState == ScaleConnectionState.SCANNING ||
+            state.scaleConnectionState == ScaleConnectionState.CONNECTING
+
     val metrics = listOf(
         "Controller" to state.controllerState.name,
         "Service" to if (state.serviceEnabled) "Enabled" else "Disabled",
@@ -235,7 +251,9 @@ private fun ControlScreen(
         "Elapsed" to "${(state.elapsedShotTimeMs / 1000.0).format(1)} s",
         "Safety" to state.safetyStatus,
         "Last pressure" to state.lastPressureCommand,
-        "Last stop" to state.lastStopCommand
+        "Last stop" to state.lastStopCommand,
+        "Scale" to state.scaleConnectionState.name,
+        "Scale Batt" to (state.scaleBatteryPercent?.let { "$it %" } ?: "--")
     )
 
     Column(
@@ -248,22 +266,48 @@ private fun ControlScreen(
             color = MaterialTheme.colorScheme.primaryContainer,
             shape = MaterialTheme.shapes.small
         ) {
-            Row(
-                modifier = Modifier.padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(onClick = { if (state.isArmed) viewModel.disarm() else viewModel.arm() }) {
-                    Text(if (state.isArmed) "Disarm" else "Arm")
-                }
-                Button(
-                    onClick = viewModel::emergencyStop,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            Column(modifier = Modifier.padding(8.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("E-Stop")
+                    Button(onClick = { if (state.isArmed) viewModel.disarm() else viewModel.arm() }) {
+                        Text(if (state.isArmed) "Disarm" else "Arm")
+                    }
+                    Button(
+                        onClick = viewModel::emergencyStop,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("E-Stop")
+                    }
+                    OutlinedButton(onClick = viewModel::manualSkipStage) { Text("Skip Stage") }
+                    TextButton(onClick = openAccessibilitySettings) { Text("Accessibility") }
                 }
-                OutlinedButton(onClick = viewModel::manualSkipStage) { Text("Skip Stage") }
-                TextButton(onClick = openAccessibilitySettings) { Text("Accessibility") }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (scaleConnected) {
+                        Button(
+                            onClick = disconnectScale,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary
+                            )
+                        ) { Text(scaleLabel) }
+                    } else {
+                        OutlinedButton(
+                            onClick = connectToScale,
+                            enabled = !scaleBusy
+                        ) { Text(scaleLabel) }
+                    }
+                    if (scaleConnected) {
+                        Text(
+                            "Using scale weight & flow",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
             }
         }
 

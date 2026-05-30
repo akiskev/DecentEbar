@@ -1,5 +1,6 @@
 package dev.akiskev.decentebar.ui
 
+import dev.akiskev.decentebar.ble.ScaleConnectionState
 import dev.akiskev.decentebar.model.ControllerState
 import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.EbarSnapshot
@@ -34,7 +35,9 @@ data class MainUiState(
     val exportedLogJson: String = "",
     val samples: List<ShotSample> = emptyList(),
     val events: List<ShotEvent> = emptyList(),
-    val videoExportProgress: Float? = null
+    val videoExportProgress: Float? = null,
+    val scaleConnectionState: ScaleConnectionState = ScaleConnectionState.DISCONNECTED,
+    val scaleBatteryPercent: Int? = null
 ) {
     val isArmed: Boolean
         get() = controllerState == ControllerState.ARMED ||

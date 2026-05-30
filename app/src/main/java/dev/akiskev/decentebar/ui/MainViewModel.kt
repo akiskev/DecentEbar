@@ -1,11 +1,15 @@
 package dev.akiskev.decentebar.ui
 
 import android.app.Application
+import android.net.Uri
 import android.os.Build
 import android.view.WindowManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.akiskev.decentebar.accessibility.EbarAccessibilityService
+import dev.akiskev.decentebar.ble.BookooScaleManager
+import dev.akiskev.decentebar.ble.ScaleConnectionState
+import dev.akiskev.decentebar.ble.ScaleReading
 import dev.akiskev.decentebar.engine.FlowEstimator
 import dev.akiskev.decentebar.engine.PressureLutManager
 import dev.akiskev.decentebar.model.BuiltInPressureLut
@@ -24,19 +28,19 @@ import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.ShotSample
 import dev.akiskev.decentebar.model.StageType
-import android.net.Uri
 import dev.akiskev.decentebar.storage.JsonCodec
 import dev.akiskev.decentebar.storage.ProfileRepository
 import dev.akiskev.decentebar.storage.ShotLogCodec
 import dev.akiskev.decentebar.storage.ShotVideoExporter
-import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -47,6 +51,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val profileRepository = ProfileRepository(application)
     private val lutManager = PressureLutManager(safetyConfig)
     private val flowEstimator = FlowEstimator(safetyConfig.maxFlowGps)
+    private val scaleManager = BookooScaleManager(application)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -88,6 +93,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             EbarAccessibilityService.snapshots.collect(::handleSnapshot)
         }
+
+        viewModelScope.launch {
+            scaleManager.connectionState.collect { state ->
+                _uiState.update { it.copy(scaleConnectionState = state) }
+            }
+        }
+
+        viewModelScope.launch {
+            scaleManager.latestReading.filterNotNull().collect(::handleScaleReading)
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        scaleManager.close()
     }
 
     fun arm() {
@@ -151,6 +171,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         EbarAccessibilityService.setShouldRun(true)
         sendStop("Emergency stop", nowMs, _uiState.value.currentWeightG, explicitRetry = true)
     }
+
+    fun connectToScale() = scaleManager.startScan()
+
+    fun disconnectScale() = scaleManager.disconnect()
 
     fun manualSkipStage() {
         manualSkipRequested = true
@@ -410,6 +434,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         firstDropConsecutiveReadings = 0
         firstDropDetected = false
         stopSent = false
+        if (_uiState.value.scaleConnectionState == ScaleConnectionState.CONNECTED) {
+            scaleManager.startTimer()
+        }
         recordState(ControllerState.RUNNING, "Shot running")
         _uiState.update {
             it.copy(
@@ -435,6 +462,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val shotStart = shotStartMs ?: nowMs.also { shotStartMs = it }
         val elapsedMs = nowMs - shotStart
+
+        // When scale is connected it drives weight/flow and calls runCurrentStage directly.
+        // Snapshots still handle safety (foreground, stop-button disappearance) and the
+        // missing-data watchdog.
+        if (_uiState.value.scaleConnectionState == ScaleConnectionState.CONNECTED) {
+            val missingSince = lastValidWeightMs ?: shotStart
+            if (nowMs - missingSince > safetyConfig.missingWeightTimeoutMs) {
+                fail("Scale: no weight data for ${safetyConfig.missingWeightTimeoutMs}ms", attemptStop = true)
+            }
+            _uiState.update { it.copy(elapsedShotTimeMs = elapsedMs, safetyStatus = "Running") }
+            return
+        }
+
         val profile = _uiState.value.selectedProfile
         val weight = snapshot.weightG
 
@@ -472,6 +512,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         runCurrentStage(nowMs, weight, flow)
+    }
+
+    private fun handleScaleReading(reading: ScaleReading) {
+        val nowMs = reading.timestampMs
+        val state = _uiState.value
+
+        // Always update battery display
+        _uiState.update { it.copy(scaleBatteryPercent = reading.batteryPercent) }
+
+        when (state.controllerState) {
+            ControllerState.RUNNING, ControllerState.STAGE_TRANSITION -> {
+                val shotStart = shotStartMs ?: return
+                val elapsedMs = nowMs - shotStart
+                val weight = reading.weightG
+                val flow = reading.flowGps
+
+                lastValidWeightMs = nowMs
+                updateFirstDrop(weight)
+
+                _uiState.update {
+                    it.copy(
+                        currentWeightG = weight,
+                        currentFlowGps = flow,
+                        elapsedShotTimeMs = elapsedMs,
+                        safetyStatus = "Running"
+                    )
+                }
+
+                appendSample(nowMs, weight, flow)
+
+                val profile = state.selectedProfile
+                if (elapsedMs >= profile.maxShotTimeMs) {
+                    sendStop("Max shot time reached", nowMs, weight)
+                    return
+                }
+                if (weight >= profile.targetWeightG - profile.stopOffsetG) {
+                    sendStop("Target stop threshold reached", nowMs, weight)
+                    return
+                }
+
+                runCurrentStage(nowMs, weight, flow)
+            }
+            else -> {
+                _uiState.update {
+                    it.copy(
+                        currentWeightG = reading.weightG,
+                        currentFlowGps = reading.flowGps
+                    )
+                }
+            }
+        }
     }
 
     private fun handleStoppingSnapshot(snapshot: EbarSnapshot, nowMs: Long) {
