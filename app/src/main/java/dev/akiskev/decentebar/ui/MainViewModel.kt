@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
@@ -61,6 +62,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var firstDropDetected = false
     private var flowCapWarningLoggedForCurrentStage = false
     private var lastFlowCorrectionMs: Long? = null
+    private var lastCorrectionFlowGps: Double? = null
 
     init {
         val profiles = profileRepository.loadProfiles()
@@ -549,15 +551,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val dueForCorrection = lastCorrection == null || (nowMs - lastCorrection) >= intervalMs
 
         if (dueForCorrection) {
+            val error = flow - target
+            val absError = abs(error)
+            val maxMult = stage.pressureStepMultiplierMax ?: 8.0
+
+            // Derivative guard: if the previous correction is already moving flow toward the
+            // target, reduce the multiplier to 30% to avoid stacking corrections faster than
+            // the system can respond (dead-time over-correction). Full multiplier when flow
+            // is still diverging or on the first correction of the stage.
+            val lastFlow = lastCorrectionFlowGps
+            val movingTowardTarget = when {
+                error > deadband -> lastFlow != null && flow < lastFlow
+                error < -deadband -> lastFlow != null && flow > lastFlow
+                else -> false
+            }
+            val rawMultiplier = if (absError > deadband) (absError / deadband).coerceAtMost(maxMult) else 0.0
+            val multiplier = if (movingTowardTarget) rawMultiplier * 0.3 else rawMultiplier
+            val scaledStep = step * multiplier
+
             val nextPressure = when {
-                flow > target + deadband -> currentPressure - step
-                flow < target - deadband -> currentPressure + step
+                flow > target + deadband -> currentPressure - scaledStep
+                flow < target - deadband -> currentPressure + scaledStep
                 else -> currentPressure
             }.coerceIn(safetyConfig.minPressureBar, cap)
 
             if (nextPressure != currentPressure || state.commandedPressureBar == null) {
                 commandPressure(nextPressure, nowMs, source = stageName)
                 lastFlowCorrectionMs = nowMs
+                lastCorrectionFlowGps = flow
             }
 
             if (!flowCapWarningLoggedForCurrentStage && nextPressure >= cap && flow < target - deadband) {
@@ -603,6 +624,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         flowCapWarningLoggedForCurrentStage = false
         lastFlowCorrectionMs = null
+        lastCorrectionFlowGps = null
         recordEvent(
             ShotEventType.STAGE_EXIT,
             "Exit ${previousStage?.name ?: "stage"} — $exitReason at ${weight.format(1)}g",
@@ -813,6 +835,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         firstDropDetected = false
         flowCapWarningLoggedForCurrentStage = false
         lastFlowCorrectionMs = null
+        lastCorrectionFlowGps = null
         flowEstimator.reset()
         lutManager.resetThrottle()
     }

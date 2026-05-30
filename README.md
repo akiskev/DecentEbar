@@ -15,7 +15,7 @@ Android AccessibilityService controller for the Decent Espresso E-Bar — automa
 - **First-drop detection** — threshold-based, optional two-consecutive-reading confirmation
 - **Pressure LUT** — built-in 0-12 bar template stored as ratios of the reference 3120×1440 layout, scaled to the device's actual screen size at runtime; nearest-point lookup, linear interpolation, command throttling, and min/max pressure clamping
 - **Flow estimator** — computes delta-weight / delta-time only when the scale reports a new reading, using the full interval since the last scale update as the denominator; `0.75 prev + 0.25 raw` exponential smoothing; holds the last estimate while the scale reading is unchanged (no artificial decay between updates)
-- **Flow-limited pressure control** — per-stage `correctionIntervalMs` (not exposed in the UI; set to 600 ms by default, ≥ scale update rate of ~500 ms) enforced in the control loop so every pressure decision uses fresh flow data; falls back to the global `pressureCommandIntervalMs` (400 ms) if not set; the global limit in `PressureLutManager` remains as a hard hardware floor
+- **Flow-limited pressure control** — PD-like controller: correction size scales linearly with how far flow is from target (`step × clamp(error / deadband, 0, maxMultiplier)`), so the controller is gentle near the setpoint and aggressive during runaway shots (e.g. coarse grind); a derivative guard checks whether the previous correction is already moving flow toward the target — if so, the multiplier is reduced to 30% to prevent stacking large corrections faster than the system can respond (dead-time over-correction); `pressureStepBar` sets the base step at the deadband edge; `pressureStepMultiplierMax` (default 8×, not exposed in UI) caps the maximum single correction; `correctionIntervalMs` (default 600 ms, not exposed in UI) ensures each decision uses a fresh scale reading; a global `pressureCommandIntervalMs` (400 ms) in `PressureLutManager` acts as a hard hardware floor
 - **Weight parser** — handles `Wt. ... g` formats including split-line and split-node decimals, graph-axis rejection, and max-weight guard
 - **Shot log** — timestamped samples (weight, flow, pressure, stage) and events (state transitions, pressure commands, stops, safety errors); stage-exit events include the specific exit condition that fired (e.g. "weight 27.2 g ≥ 27.0 g", "first drop detected", "time limit 1500 ms reached"); flow-cap diagnostic events logged once per stage when target flow cannot be reached due to pressure cap; JSON export, self-contained HTML report with interactive chart, and MP4 video export
 - **Shot HTML report** — Chart.js chart (flow/pressure/weight over time, stage bands, first-drop marker) plus a full event table with colour-coded badges; saved alongside the JSON in a single "Save to File" action
@@ -39,14 +39,13 @@ All numeric parameters use a slider with an inline editable text field for preci
 
 ## Default profile
 
-**Flow 34** — six stages, target 33 g, max shot time 45 s:
+**Flow 34** — five stages, target 33 g, max shot time 45 s:
 
-1. **Preinfusion** — 7 bar fixed, exits on first drop or after 15 s
+1. **Preinfusion** — 7 bar fixed, exits on first drop (two consecutive readings required) or after 15 s
 2. **Wait** — 0 bar (pump off), exits when weight ≥ 6 g or after 5 s
-3. **Ramp** — 0 → 9 bar over 1.5 s
-4. **Main** — flow-limited at 1.9 g/s ± 0.1 g/s deadband, 9 bar cap, corrects every 600 ms, exits at 27 g
-5. **Fade** — flow-limited at 1.6 g/s ± 0.1 g/s deadband, 8 bar cap, corrects every 600 ms, pressure ramps 8 → 5 bar from 28 g to 35 g, exits at 32 g
-6. **Stop**
+3. **Main** — flow-limited at 1.9 g/s ± 0.1 g/s deadband, 9 bar cap, corrects every 600 ms, exits at 27 g; pressure ramps up naturally from 0 bar via the P controller rather than a fixed time ramp
+4. **Fade** — flow-limited at 1.6 g/s ± 0.1 g/s deadband, 8 bar cap, corrects every 600 ms, pressure ramps 8 → 5 bar from 28 g to 35 g, exits at 32 g
+5. **Stop**
 
 ## Build
 

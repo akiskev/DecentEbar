@@ -42,6 +42,7 @@ data class ProfileStage(
     val flowDeadbandGps: Double? = null,
     val pressureStepBar: Double? = null,
     val correctionIntervalMs: Long? = null,
+    val pressureStepMultiplierMax: Double? = null,
     val rampStartPressureBar: Double? = null,
     val rampEndPressureBar: Double? = null,
     val rampStartWeightG: Double? = null,
@@ -261,22 +262,13 @@ object DefaultProfiles {
                 type = StageType.FIXED_PRESSURE,
                 fixedPressureBar = 7.0,
                 exit = ExitCondition(stageTimeGteMs = 15_000L, firstDropDetected = true),
-                safety = StageSafety()
+                safety = StageSafety(requireTwoConsecutiveFirstDropReadings = true)
             ),
             ProfileStage(
                 name = "Wait",
                 type = StageType.FIXED_PRESSURE,
                 fixedPressureBar = 0.0,
                 exit = ExitCondition(weightGte = 6.0, stageTimeGteMs = 5_000L),
-                safety = StageSafety()
-            ),
-            ProfileStage(
-                name = "Ramp",
-                type = StageType.TIME_BASED_PRESSURE_RAMP,
-                rampStartPressureBar = 0.0,
-                rampEndPressureBar = 9.0,
-                rampDurationMs = 1_500L,
-                exit = ExitCondition(stageTimeGteMs = 1_500L),
                 safety = StageSafety()
             ),
             ProfileStage(
@@ -287,6 +279,7 @@ object DefaultProfiles {
                 flowDeadbandGps = 0.1,
                 pressureStepBar = 0.2,
                 correctionIntervalMs = 600L,
+                pressureStepMultiplierMax = 8.0,
                 exit = ExitCondition(weightGte = 27.0),
                 safety = StageSafety(maxStageTimeMs = 35_000L)
             ),
@@ -298,6 +291,7 @@ object DefaultProfiles {
                 flowDeadbandGps = 0.1,
                 pressureStepBar = 0.2,
                 correctionIntervalMs = 600L,
+                pressureStepMultiplierMax = 8.0,
                 rampEndPressureBar = 5.0,
                 rampStartWeightG = 28.0,
                 rampEndWeightG = 35.0,
