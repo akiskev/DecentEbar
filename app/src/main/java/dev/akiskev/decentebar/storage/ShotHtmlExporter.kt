@@ -18,6 +18,9 @@ object ShotHtmlExporter {
         val stageNamesJs = stageNames.joinToString(",") { "\"${escJs(it)}\"" }
         val eventsJs = buildEventsJs(log.events)
         val eventsRows = buildEventsRows(log.events)
+        val targetFlowsJs = stageNames.joinToString(",") { name ->
+            log.stageTargetFlows[name]?.let { "%.3f".format(it) } ?: "null"
+        }
 
         return """<!DOCTYPE html>
 <html lang="en">
@@ -30,7 +33,8 @@ object ShotHtmlExporter {
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#111;color:#ddd;padding:20px;max-width:1100px}
 h1{font-size:1.35em;font-weight:600;color:#fff;margin-bottom:4px}
 .meta{font-size:.82em;color:#777;margin-bottom:20px}
-.chart-wrap{background:#1a1a1a;border-radius:10px;padding:16px 12px 8px;margin-bottom:24px}
+.chart-wrap{position:relative;background:#1a1a1a;border-radius:10px;padding:16px 12px 8px;margin-bottom:24px}
+.chart-wrap canvas{display:block;width:100%!important}
 h2{font-size:.8em;font-weight:600;color:#888;margin:24px 0 10px;text-transform:uppercase;letter-spacing:.07em}
 table{width:100%;border-collapse:collapse;font-size:.78em}
 th{text-align:left;padding:6px 10px;background:#181818;color:#666;font-weight:500;border-bottom:1px solid #2a2a2a}
@@ -51,7 +55,7 @@ tr:hover td{background:#161616}
 <body>
 <h1>${escHtml(title)}</h1>
 <p class="meta">${escHtml(meta)}</p>
-<div class="chart-wrap"><canvas id="c" height="90"></canvas></div>
+<div class="chart-wrap"><canvas id="c"></canvas></div>
 <h2>Events</h2>
 <table>
 <thead><tr><th>Time</th><th>Type</th><th>Detail</th></tr></thead>
@@ -63,6 +67,7 @@ $eventsRows</tbody>
 const S=[$stageNamesJs];
 const D=$samplesJs;
 const E=$eventsJs;
+const TARGETS=[$targetFlowsJs];
 ${chartScript()}
 </script>
 </body>
@@ -89,7 +94,7 @@ ${chartScript()}
         return parts.joinToString(" · ")
     }
 
-    // D[i] = [timeMs, flow, pressure|null, weight, stageIdx]
+    // D[i] = [timeMs, scaleFlow, pressure|null, weight, stageIdx, altFlow|null]
     private fun buildSamplesJs(samples: List<ShotSample>, stageNames: List<String>): String {
         val idx = stageNames.withIndex().associate { (i, n) -> n to i }
         return buildString {
@@ -102,7 +107,8 @@ ${chartScript()}
                 if (s.commandedPressureBar != null) append("%.2f".format(s.commandedPressureBar)) else append("null")
                 append(',')
                 append("%.2f".format(s.weightG)).append(',')
-                append(idx[s.stageName] ?: 0)
+                append(idx[s.stageName] ?: 0).append(',')
+                if (s.altFlowGps != null) append("%.3f".format(s.altFlowGps)) else append("null")
                 append(']')
             }
             append(']')
@@ -150,10 +156,10 @@ ${chartScript()}
     private fun chartScript(): String = """
 const PALETTE=['rgba(60,80,160,0.18)','rgba(50,140,80,0.18)','rgba(160,60,60,0.18)','rgba(150,140,50,0.18)','rgba(50,140,150,0.18)','rgba(110,60,160,0.18)'];
 const times=D.map(d=>d[0]/1000);
-const flows=D.map(d=>d[1]);
-const pressures=D.map(d=>d[2]);
-const weights=D.map(d=>d[3]);
 const stageIdxs=D.map(d=>d[4]);
+const hasAlt=D.some(d=>d[5]!==null);
+const hasTargets=TARGETS.some(t=>t!==null);
+// Build stage bands using actual time values
 const bands=[];
 let last=-1;
 for(let i=0;i<D.length;i++){
@@ -190,31 +196,38 @@ const dropPlugin={
     ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();ctx.restore();
   }
 };
-new Chart(document.getElementById('c'),{
+// Datasets use {x,y} pairs so the linear x-axis spaces points by real time
+const xyFlow=times.map((t,i)=>({x:t,y:D[i][1]}));
+const xyPressure=times.map((t,i)=>({x:t,y:D[i][2]}));
+const xyWeight=times.map((t,i)=>({x:t,y:D[i][3]}));
+const xyAlt=hasAlt?times.map((t,i)=>({x:t,y:D[i][5]})):null;
+const xyTarget=hasTargets?times.map((t,i)=>{const v=TARGETS[stageIdxs[i]];return v!=null?{x:t,y:v}:null;}):null;
+const datasets=[
+  {label:hasAlt?'Scale Flow (g/s)':'Flow (g/s)',data:xyFlow,borderColor:'#5b9cf6',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',tension:0.2},
+  ...(hasAlt?[{label:'Calc Flow (g/s)',data:xyAlt,borderColor:'#9b6fda',backgroundColor:'transparent',borderWidth:1,borderDash:[4,3],pointRadius:0,yAxisID:'yL',tension:0.2,spanGaps:true}]:[]),
+  {label:'Pressure (bar)',data:xyPressure,borderColor:'#f6a25b',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',spanGaps:true},
+  {label:'Weight (g)',data:xyWeight,borderColor:'#5bf6a2',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yR'},
+  ...(hasTargets?[{label:'Target Flow (g/s)',data:xyTarget,borderColor:'rgba(255,193,7,0.65)',backgroundColor:'transparent',borderWidth:1,borderDash:[4,3],pointRadius:0,yAxisID:'yL',spanGaps:false,tension:0}]:[])
+];
+const chart=new Chart(document.getElementById('c'),{
   type:'line',
-  data:{
-    labels:times.map(t=>t.toFixed(1)),
-    datasets:[
-      {label:'Flow (g/s)',data:flows,borderColor:'#5b9cf6',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',tension:0.2},
-      {label:'Pressure (bar)',data:pressures,borderColor:'#f6a25b',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',spanGaps:true},
-      {label:'Weight (g)',data:weights,borderColor:'#5bf6a2',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yR'}
-    ]
-  },
+  data:{datasets},
   options:{
-    animation:false,responsive:true,
+    animation:false,responsive:true,maintainAspectRatio:true,aspectRatio:4,
     interaction:{mode:'index',intersect:false},
     plugins:{
       legend:{labels:{color:'#999',boxWidth:12,font:{size:11}}},
       tooltip:{backgroundColor:'#222',titleColor:'#999',bodyColor:'#ddd',borderColor:'#333',borderWidth:1}
     },
     scales:{
-      x:{title:{display:true,text:'Time (s)',color:'#555'},ticks:{color:'#555',maxTicksLimit:20},grid:{color:'#222'}},
+      x:{type:'linear',title:{display:true,text:'Time (s)',color:'#555'},ticks:{color:'#555',maxTicksLimit:20},grid:{color:'#222'}},
       yL:{position:'left',title:{display:true,text:'Flow (g/s) / Pressure (bar)',color:'#555'},ticks:{color:'#555'},grid:{color:'#222'},min:0},
       yR:{position:'right',title:{display:true,text:'Weight (g)',color:'#555'},ticks:{color:'#555'},grid:{drawOnChartArea:false}}
     }
   },
   plugins:[bandsPlugin,dropPlugin]
-});"""
+});
+let _rt;window.addEventListener('resize',()=>{clearTimeout(_rt);_rt=setTimeout(()=>chart.resize(),60);});"""
 
     private fun escHtml(s: String): String = s
         .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")

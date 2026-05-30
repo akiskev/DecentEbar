@@ -681,23 +681,12 @@ private fun StageEditor(
                             unit = "g/s",
                             onChange = { onStageChange(stage.copy(targetFlowGps = it)) }
                         )
-                        SliderField(
-                            label = "Flow deadband",
-                            value = stage.flowDeadbandGps ?: 0.2,
-                            valueRange = 0f..2f,
-                            steps = 39,
-                            unit = "g/s",
-                            onChange = { onStageChange(stage.copy(flowDeadbandGps = it)) }
+                        Text(
+                            "Deadband, step and correction interval are auto-tuned" +
+                                " (faster with BLE scale). Override via JSON import.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
                         )
-                        SliderField(
-                            label = "Pressure step",
-                            value = stage.pressureStepBar ?: 0.2,
-                            valueRange = 0f..1f,
-                            steps = 19,
-                            unit = "bar",
-                            onChange = { onStageChange(stage.copy(pressureStepBar = it)) }
-                        )
-
                     }
                     StageType.WEIGHT_BASED_PRESSURE_RAMP -> {
                         SliderField(
@@ -962,6 +951,8 @@ private fun DebugScreen(state: MainUiState) {
         "Last stop cmd" to state.lastStopCommand,
         "Last safety error" to state.lastSafetyError
     )
+    val scaleConnected = state.scaleConnectionState == ScaleConnectionState.CONNECTED
+    val flowDiff = state.currentFlowGps - state.currentCalcFlowGps
 
     Row(
         modifier = Modifier
@@ -973,6 +964,23 @@ private fun DebugScreen(state: MainUiState) {
             modifier = Modifier.weight(0.5f),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            if (scaleConnected) {
+                Panel("Flow Comparison (Scale vs Software)") {
+                    val compMetrics = listOf(
+                        "Scale flow" to "${state.currentFlowGps.format(2)} g/s",
+                        "Calc flow" to "${state.currentCalcFlowGps.format(2)} g/s",
+                        "Diff (S−C)" to "${if (flowDiff >= 0) "+" else ""}${flowDiff.format(2)} g/s"
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        compMetrics.forEach { (label, value) ->
+                            MetricCell(label, value, Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
             Panel("Accessibility Snapshot") {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     snapshotMetrics.chunked(3).forEach { row ->

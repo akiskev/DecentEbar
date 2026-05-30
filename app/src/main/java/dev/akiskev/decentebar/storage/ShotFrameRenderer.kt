@@ -2,6 +2,7 @@ package dev.akiskev.decentebar.storage
 
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Typeface
@@ -10,7 +11,38 @@ import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotSample
 import kotlin.math.ceil
 import kotlin.math.max
-import kotlin.math.roundToInt
+
+// Material Design dark-theme palette
+private object MD {
+    // Surfaces
+    val background = Color.rgb(18, 18, 18)          // #121212
+
+    // Data lines — MD accent colors
+    val flow     = Color.rgb(68, 138, 255)           // Blue A200  #448AFF
+    val pressure = Color.rgb(255, 110, 64)           // Deep Orange A200  #FF6E40
+    val weight   = Color.rgb(100, 255, 218)          // Teal A200  #64FFDA
+    val target   = Color.rgb(255, 193, 7)            // Amber 500  #FFC107  (target-flow line)
+
+    // First-drop marker
+    val firstDrop = Color.argb(200, 239, 83, 80)     // Red 400 #EF5350
+
+    // Structure
+    fun grid()  = Color.argb(18,  255, 255, 255)     // 7% white
+    fun axis()  = Color.argb(59,  255, 255, 255)     // 23% white
+    fun text87()= Color.argb(222, 255, 255, 255)     // high-emphasis
+    fun text60()= Color.argb(153, 255, 255, 255)     // medium-emphasis
+    fun text38()= Color.argb(97,  255, 255, 255)     // disabled/hint
+
+    // Stage band fills — MD 900-series hues at 16% opacity
+    val bands = intArrayOf(
+        Color.argb(41, 26,  35,  126),   // Indigo 900
+        Color.argb(41, 27,  94,  32 ),   // Green 900
+        Color.argb(41, 183, 28,  28 ),   // Red 900
+        Color.argb(41, 230, 81,  0  ),   // Deep Orange 900
+        Color.argb(41, 0,   96,  100),   // Cyan 900
+        Color.argb(41, 74,  20,  140)    // Purple 900
+    )
+}
 
 class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private val h: Int) {
 
@@ -43,31 +75,26 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         (ceil(mw / 5) * 5).toFloat().coerceAtLeast(10f)
     }
 
-    // Stage info: list of (stageName, startMs, color)
-    private data class Band(val name: String, val startMs: Long, val endMs: Long, val color: Int)
+    private data class Band(val name: String, val startMs: Long, val endMs: Long, val color: Int, val targetFlow: Double?)
     private val bands: List<Band> = run {
-        val ALPHA = 0x28
-        val palette = intArrayOf(
-            Color.argb(ALPHA, 60,  80,  200),
-            Color.argb(ALPHA, 50,  180, 80),
-            Color.argb(ALPHA, 200, 70,  60),
-            Color.argb(ALPHA, 180, 160, 40),
-            Color.argb(ALPHA, 50,  170, 180),
-            Color.argb(ALPHA, 140, 60,  200)
-        )
         val result = mutableListOf<Band>()
-        var i = 0
         var lastName = ""
         var bandStart = 0L
         log.samples.forEach { s ->
             if (s.stageName != lastName) {
-                if (lastName.isNotEmpty()) result += Band(lastName, bandStart, s.timeMs, palette[result.size % palette.size])
+                if (lastName.isNotEmpty()) {
+                    result += Band(lastName, bandStart, s.timeMs,
+                        MD.bands[result.size % MD.bands.size],
+                        log.stageTargetFlows[lastName])
+                }
                 lastName = s.stageName
                 bandStart = s.timeMs
-                i++
             }
         }
-        if (lastName.isNotEmpty()) result += Band(lastName, bandStart, log.samples.lastOrNull()?.timeMs ?: bandStart, palette[result.size % palette.size])
+        if (lastName.isNotEmpty()) result += Band(lastName, bandStart,
+            log.samples.lastOrNull()?.timeMs ?: bandStart,
+            MD.bands[result.size % MD.bands.size],
+            log.stageTargetFlows[lastName])
         result
     }
 
@@ -75,31 +102,39 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         .firstOrNull { it.type == ShotEventType.FIRST_DROP }?.timeMs
 
     // Paints
-    private val bgPaint = Paint().apply { color = Color.rgb(16, 16, 18) }
-    private val gridPaint = Paint().apply { color = Color.argb(40, 200, 200, 200); strokeWidth = 1f; style = Paint.Style.STROKE }
-    private val axisPaint = Paint().apply { color = Color.argb(100, 200, 200, 200); strokeWidth = 1.5f; style = Paint.Style.STROKE }
-    private val bandPaint = Paint().apply { style = Paint.Style.FILL }
-    private val flowPaint = Paint().apply { color = Color.rgb(91, 156, 246); strokeWidth = (h * 0.003f); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
-    private val pressurePaint = Paint().apply { color = Color.rgb(246, 162, 91); strokeWidth = (h * 0.003f); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
-    private val weightPaint = Paint().apply { color = Color.rgb(91, 246, 162); strokeWidth = (h * 0.003f); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
-    private val dropPaint = Paint().apply { color = Color.argb(180, 210, 70, 70); strokeWidth = 1.5f; style = Paint.Style.STROKE }
-    private val labelPaint = Paint().apply { color = Color.argb(140, 200, 200, 200); textSize = h * 0.028f; isAntiAlias = true; typeface = Typeface.MONOSPACE }
-    private val stageLabelPaint = Paint().apply { color = Color.argb(140, 200, 200, 200); textSize = h * 0.026f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
-    private val valuePaint = Paint().apply { color = Color.rgb(230, 230, 230); textSize = h * 0.038f; isAntiAlias = true; typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) }
-    private val titlePaint = Paint().apply { color = Color.rgb(240, 240, 240); textSize = h * 0.05f; isAntiAlias = true; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
-    private val dimPaint = Paint().apply { color = Color.argb(180, 140, 140, 140); textSize = h * 0.032f; isAntiAlias = true }
-    private val flowDotPaint = Paint().apply { color = Color.rgb(91, 156, 246); style = Paint.Style.FILL; isAntiAlias = true }
-    private val pressureDotPaint = Paint().apply { color = Color.rgb(246, 162, 91); style = Paint.Style.FILL; isAntiAlias = true }
-    private val weightDotPaint = Paint().apply { color = Color.rgb(91, 246, 162); style = Paint.Style.FILL; isAntiAlias = true }
+    private val lw = (h * 0.003f)
+    private val bgPaint      = Paint().apply { color = MD.background }
+    private val gridPaint    = Paint().apply { color = MD.grid(); strokeWidth = 1f; style = Paint.Style.STROKE }
+    private val axisPaint    = Paint().apply { color = MD.axis(); strokeWidth = 1.5f; style = Paint.Style.STROKE }
+    private val bandPaint    = Paint().apply { style = Paint.Style.FILL }
+    private val flowPaint    = Paint().apply { color = MD.flow; strokeWidth = lw; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
+    private val pressurePaint= Paint().apply { color = MD.pressure; strokeWidth = lw; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
+    private val weightPaint  = Paint().apply { color = MD.weight; strokeWidth = lw; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
+    private val targetPaint  = Paint().apply {
+        color = Color.argb(160, 255, 193, 7)  // Amber 500 at 63% — dashed target-flow line
+        strokeWidth = lw * 0.7f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+        pathEffect = DashPathEffect(floatArrayOf(h * 0.012f, h * 0.008f), 0f)
+    }
+    private val dropPaint    = Paint().apply { color = MD.firstDrop; strokeWidth = 1.5f; style = Paint.Style.STROKE }
+    private val labelPaint   = Paint().apply { color = MD.text60(); textSize = h * 0.028f; isAntiAlias = true; typeface = Typeface.MONOSPACE }
+    private val stageLabelPaint = Paint().apply { color = MD.text38(); textSize = h * 0.026f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
+    private val valuePaint   = Paint().apply { color = MD.text87(); textSize = h * 0.038f; isAntiAlias = true; typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) }
+    private val titlePaint   = Paint().apply { color = MD.text87(); textSize = h * 0.05f; isAntiAlias = true; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
+    private val dimPaint     = Paint().apply { color = MD.text60(); textSize = h * 0.032f; isAntiAlias = true }
+    private val flowDotPaint     = Paint().apply { color = MD.flow; style = Paint.Style.FILL; isAntiAlias = true }
+    private val pressureDotPaint = Paint().apply { color = MD.pressure; style = Paint.Style.FILL; isAntiAlias = true }
+    private val weightDotPaint   = Paint().apply { color = MD.weight; style = Paint.Style.FILL; isAntiAlias = true }
 
     fun render(canvas: Canvas, frameTimeMs: Long) {
         val visibleSamples = log.samples.filter { it.timeMs <= frameTimeMs }
-
         canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bgPaint)
         drawBands(canvas, frameTimeMs)
         drawGrid(canvas)
         drawAxes(canvas)
         drawFirstDrop(canvas, frameTimeMs)
+        drawTargetFlowLines(canvas, frameTimeMs)
         drawLines(canvas, visibleSamples)
         drawCurrentDots(canvas, visibleSamples)
         drawAxisLabels(canvas)
@@ -118,14 +153,12 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
             val x1 = xPx(b.startMs)
             val x2 = xPx(minOf(b.endMs, upToMs))
             canvas.drawRect(x1, plotT, x2, plotB, bandPaint)
-            // Stage label at top of band
             val midX = (x1 + x2) / 2f
             canvas.drawText(b.name, midX, plotT + stageLabelPaint.textSize + 4f, stageLabelPaint)
         }
     }
 
     private fun drawGrid(canvas: Canvas) {
-        // Horizontal grid lines (left axis)
         val step = if (maxLeftY > 10f) 2f else 1f
         var v = step
         while (v < maxLeftY) {
@@ -133,13 +166,8 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
             canvas.drawLine(plotL, y, plotR, y, gridPaint)
             v += step
         }
-        // Vertical grid every 5 seconds
         val durSec = (shotDurationMs / 1000).toInt()
-        val secStep = when {
-            durSec > 60 -> 10
-            durSec > 30 -> 5
-            else -> 5
-        }
+        val secStep = if (durSec > 60) 10 else 5
         var s = secStep
         while (s < durSec) {
             val x = xPx(s * 1000L)
@@ -149,46 +177,48 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
     }
 
     private fun drawAxes(canvas: Canvas) {
-        canvas.drawLine(plotL, plotT, plotL, plotB, axisPaint)   // left axis
-        canvas.drawLine(plotR, plotT, plotR, plotB, axisPaint)   // right axis
-        canvas.drawLine(plotL, plotB, plotR, plotB, axisPaint)   // x axis
+        canvas.drawLine(plotL, plotT, plotL, plotB, axisPaint)
+        canvas.drawLine(plotR, plotT, plotR, plotB, axisPaint)
+        canvas.drawLine(plotL, plotB, plotR, plotB, axisPaint)
     }
 
     private fun drawFirstDrop(canvas: Canvas, upToMs: Long) {
         val t = firstDropMs ?: return
         if (t > upToMs) return
         val x = xPx(t)
-        dropPaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8f, 5f), 0f)
+        dropPaint.pathEffect = DashPathEffect(floatArrayOf(8f, 5f), 0f)
         canvas.drawLine(x, plotT, x, plotB, dropPaint)
         dropPaint.pathEffect = null
     }
 
+    private fun drawTargetFlowLines(canvas: Canvas, upToMs: Long) {
+        bands.forEach { b ->
+            val tf = b.targetFlow ?: return@forEach
+            if (b.startMs > upToMs) return@forEach
+            val x1 = xPx(b.startMs)
+            val x2 = xPx(minOf(b.endMs, upToMs))
+            val y = yPxLeft(tf.toFloat())
+            canvas.drawLine(x1, y, x2, y, targetPaint)
+        }
+    }
+
     private fun drawLines(canvas: Canvas, samples: List<ShotSample>) {
         if (samples.size < 2) return
-
         val flowPath = Path()
         val pressurePath = Path()
         val weightPath = Path()
-
-        var firstFlow = true
-        var firstPressure = true
-        var firstWeight = true
-
+        var firstFlow = true; var firstPressure = true; var firstWeight = true
         samples.forEach { s ->
             val x = xPx(s.timeMs)
-
             val yFlow = yPxLeft(s.flowGps.toFloat())
             if (firstFlow) { flowPath.moveTo(x, yFlow); firstFlow = false } else flowPath.lineTo(x, yFlow)
-
             s.commandedPressureBar?.let { p ->
                 val yP = yPxLeft(p.toFloat())
                 if (firstPressure) { pressurePath.moveTo(x, yP); firstPressure = false } else pressurePath.lineTo(x, yP)
             }
-
             val yW = yPxRight(s.weightG.toFloat())
             if (firstWeight) { weightPath.moveTo(x, yW); firstWeight = false } else weightPath.lineTo(x, yW)
         }
-
         canvas.drawPath(weightPath, weightPaint)
         canvas.drawPath(pressurePath, pressurePaint)
         canvas.drawPath(flowPath, flowPaint)
@@ -198,7 +228,6 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         val last = samples.lastOrNull() ?: return
         val x = xPx(last.timeMs)
         val r = h * 0.008f
-
         canvas.drawCircle(x, yPxLeft(last.flowGps.toFloat()), r, flowDotPaint)
         last.commandedPressureBar?.let { canvas.drawCircle(x, yPxLeft(it.toFloat()), r, pressureDotPaint) }
         canvas.drawCircle(x, yPxRight(last.weightG.toFloat()), r, weightDotPaint)
@@ -206,7 +235,6 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
 
     private fun drawAxisLabels(canvas: Canvas) {
         labelPaint.textAlign = Paint.Align.RIGHT
-        // Left axis ticks
         val step = if (maxLeftY > 10f) 2f else 1f
         var v = 0f
         while (v <= maxLeftY) {
@@ -214,7 +242,6 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
             canvas.drawText(v.toInt().toString(), plotL - 8f, y, labelPaint)
             v += step
         }
-        // Right axis ticks
         labelPaint.textAlign = Paint.Align.LEFT
         val wStep = if (maxWeight > 20f) 5f else 2f
         var wv = 0f
@@ -223,10 +250,9 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
             canvas.drawText(wv.toInt().toString(), plotR + 8f, y, labelPaint)
             wv += wStep
         }
-        // X axis ticks
         labelPaint.textAlign = Paint.Align.CENTER
         val durSec = (shotDurationMs / 1000).toInt()
-        val secStep = when { durSec > 60 -> 10; durSec > 30 -> 5; else -> 5 }
+        val secStep = if (durSec > 60) 10 else 5
         var s = 0
         while (s <= durSec) {
             val x = xPx(s * 1000L)
@@ -242,24 +268,22 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         val x0 = plotL + plotW * 0.03f
         var y = plotT + lineH
 
-        data class Row(val paint: Paint, val dot: Paint, val label: String, val value: String)
+        data class Row(val color: Int, val dot: Paint, val label: String, val value: String)
         val rows = listOf(
-            Row(Paint().apply { color = Color.rgb(91, 156, 246); textSize = dimPaint.textSize; isAntiAlias = true },
-                flowDotPaint, "Flow", if (last != null) "${"%.2f".format(last.flowGps)} g/s" else "--"),
-            Row(Paint().apply { color = Color.rgb(246, 162, 91); textSize = dimPaint.textSize; isAntiAlias = true },
-                pressureDotPaint, "Pressure", if (last?.commandedPressureBar != null) "${"%.1f".format(last.commandedPressureBar)} bar" else "--"),
-            Row(Paint().apply { color = Color.rgb(91, 246, 162); textSize = dimPaint.textSize; isAntiAlias = true },
-                weightDotPaint, "Weight", if (last != null) "${"%.1f".format(last.weightG)} g" else "--")
+            Row(MD.flow,     flowDotPaint,     "Flow",     if (last != null) "${"%.2f".format(last.flowGps)} g/s" else "--"),
+            Row(MD.pressure, pressureDotPaint, "Pressure", if (last?.commandedPressureBar != null) "${"%.1f".format(last.commandedPressureBar)} bar" else "--"),
+            Row(MD.weight,   weightDotPaint,   "Weight",   if (last != null) "${"%.1f".format(last.weightG)} g" else "--")
         )
-
+        val rowPaint = Paint().apply { isAntiAlias = true; textSize = dimPaint.textSize }
         rows.forEach { row ->
             canvas.drawCircle(x0, y - dotR * 0.5f, dotR, row.dot)
-            row.paint.textAlign = Paint.Align.LEFT
-            valuePaint.color = Color.rgb(220, 220, 220)
+            rowPaint.color = row.color
+            rowPaint.textAlign = Paint.Align.LEFT
             val label = "${row.label}  "
-            canvas.drawText(label, x0 + dotR * 2.5f, y, row.paint)
+            canvas.drawText(label, x0 + dotR * 2.5f, y, rowPaint)
+            valuePaint.color = MD.text87()
             valuePaint.textAlign = Paint.Align.LEFT
-            canvas.drawText(row.value, x0 + dotR * 2.5f + row.paint.measureText(label), y, valuePaint)
+            canvas.drawText(row.value, x0 + dotR * 2.5f + rowPaint.measureText(label), y, valuePaint)
             y += lineH
         }
     }
@@ -267,28 +291,23 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
     private fun drawTitle(canvas: Canvas, frameTimeMs: Long) {
         val sec = frameTimeMs / 1000
         val frac = (frameTimeMs % 1000) / 100
-        val timeStr = "${sec}.${frac}s"
-        val profile = log.profileName
-
         titlePaint.textAlign = Paint.Align.LEFT
-        canvas.drawText(profile, plotL, plotT - titlePaint.textSize * 0.4f, titlePaint)
-
+        canvas.drawText(log.profileName, plotL, plotT - titlePaint.textSize * 0.4f, titlePaint)
         dimPaint.textAlign = Paint.Align.RIGHT
-        canvas.drawText(timeStr, plotR, plotT - dimPaint.textSize * 0.3f, dimPaint)
+        canvas.drawText("${sec}.${frac}s", plotR, plotT - dimPaint.textSize * 0.3f, dimPaint)
 
-        // Legend dots (top right)
+        // Legend (top-right, reversed so Flow is outermost)
         val lx = plotR - w * 0.01f
         val ly = plotT + titlePaint.textSize * 0.6f
         val lr = h * 0.005f
         val legendItems = listOf(
-            Triple(flowDotPaint, "Flow (g/s)", dimPaint.textSize),
-            Triple(pressureDotPaint, "Pressure (bar)", dimPaint.textSize),
-            Triple(weightDotPaint, "Weight (g)", dimPaint.textSize)
+            flowDotPaint     to "Flow (g/s)",
+            pressureDotPaint to "Pressure (bar)",
+            weightDotPaint   to "Weight (g)"
         )
         dimPaint.textAlign = Paint.Align.RIGHT
         var legendX = lx
-        legendItems.reversed().forEach { (dot, label, ts) ->
-            dimPaint.textSize = ts
+        legendItems.reversed().forEach { (dot, label) ->
             canvas.drawText(label, legendX, ly, dimPaint)
             legendX -= dimPaint.measureText(label) + lr * 3
             canvas.drawCircle(legendX + lr, ly - lr * 0.5f, lr, dot)

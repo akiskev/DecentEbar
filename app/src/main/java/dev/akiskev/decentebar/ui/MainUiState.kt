@@ -20,6 +20,7 @@ data class MainUiState(
     val lutValidation: LutValidationResult = LutValidationResult.Missing,
     val currentWeightG: Double? = null,
     val currentFlowGps: Double = 0.0,
+    val currentCalcFlowGps: Double = 0.0,
     val currentStageIndex: Int = -1,
     val commandedPressureBar: Double? = null,
     val elapsedShotTimeMs: Long = 0L,

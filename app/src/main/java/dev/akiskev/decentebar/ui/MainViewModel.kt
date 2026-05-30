@@ -194,12 +194,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun currentShotLog(): ShotLog? {
         val state = _uiState.value
         if (state.samples.isEmpty() && state.events.isEmpty()) return null
+        val targetFlows = state.selectedProfile.stages
+            .mapNotNull { stage -> stage.targetFlowGps?.let { stage.name to it } }
+            .toMap()
         return ShotLog(
             profileName = state.selectedProfile.name,
             startedAtMs = shotStartMs,
             stoppedAtMs = shotStoppedMs,
             samples = state.samples,
-            events = state.events
+            events = state.events,
+            stageTargetFlows = targetFlows
         )
     }
 
@@ -517,16 +521,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleScaleReading(reading: ScaleReading) {
         val nowMs = reading.timestampMs
         val state = _uiState.value
-
-        // Always update battery display
-        _uiState.update { it.copy(scaleBatteryPercent = reading.batteryPercent) }
+        val weight = reading.weightG
+        val scaleFlow = reading.flowGps
+        // Run our software estimator in parallel — result logged as altFlowGps for comparison
+        val calcFlow = flowEstimator.addSample(nowMs, weight)
 
         when (state.controllerState) {
             ControllerState.RUNNING, ControllerState.STAGE_TRANSITION -> {
                 val shotStart = shotStartMs ?: return
                 val elapsedMs = nowMs - shotStart
-                val weight = reading.weightG
-                val flow = reading.flowGps
 
                 lastValidWeightMs = nowMs
                 updateFirstDrop(weight)
@@ -534,13 +537,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(
                         currentWeightG = weight,
-                        currentFlowGps = flow,
+                        currentFlowGps = scaleFlow,
+                        currentCalcFlowGps = calcFlow,
                         elapsedShotTimeMs = elapsedMs,
+                        scaleBatteryPercent = reading.batteryPercent,
                         safetyStatus = "Running"
                     )
                 }
 
-                appendSample(nowMs, weight, flow)
+                appendSample(nowMs, weight, scaleFlow, altFlowGps = calcFlow)
 
                 val profile = state.selectedProfile
                 if (elapsedMs >= profile.maxShotTimeMs) {
@@ -552,13 +557,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return
                 }
 
-                runCurrentStage(nowMs, weight, flow)
+                runCurrentStage(nowMs, weight, scaleFlow)
             }
             else -> {
                 _uiState.update {
                     it.copy(
-                        currentWeightG = reading.weightG,
-                        currentFlowGps = reading.flowGps
+                        currentWeightG = weight,
+                        currentFlowGps = scaleFlow,
+                        currentCalcFlowGps = calcFlow,
+                        scaleBatteryPercent = reading.batteryPercent
                     )
                 }
             }
@@ -632,24 +639,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _uiState.value
         val stage = state.selectedProfile.stages.getOrNull(state.currentStageIndex) ?: return
         val target = stage.targetFlowGps ?: return
-        val deadband = stage.flowDeadbandGps ?: 0.0
-        val step = stage.pressureStepBar ?: 0.0
         val cap = min(stage.pressureCapBar ?: safetyConfig.maxPressureBar, safetyConfig.maxPressureBar)
         val currentPressure = state.commandedPressureBar ?: min(cap, stageEntryPressureBar ?: cap)
 
-        val intervalMs = stage.correctionIntervalMs ?: safetyConfig.pressureCommandIntervalMs
+        // Auto-tune: with BLE scale the control loop runs much faster, so use a shorter
+        // correction interval and a proportionally smaller step to keep the max rate of
+        // pressure change constant (bar/s) regardless of interval.
+        val scaleOn = state.scaleConnectionState == ScaleConnectionState.CONNECTED
+        val autoIntervalMs = if (scaleOn) 250L else 600L
+        val intervalMs = stage.correctionIntervalMs ?: autoIntervalMs
+        val autoStep = 0.6 * (autoIntervalMs.toDouble() / 600.0)  // 0.25 with BLE, 0.6 without
+        val step = stage.pressureStepBar ?: autoStep
+        val deadband = stage.flowDeadbandGps ?: 0.1
+        val maxMult = stage.pressureStepMultiplierMax ?: 8.0
+
         val lastCorrection = lastFlowCorrectionMs
         val dueForCorrection = lastCorrection == null || (nowMs - lastCorrection) >= intervalMs
 
         if (dueForCorrection) {
             val error = flow - target
             val absError = abs(error)
-            val maxMult = stage.pressureStepMultiplierMax ?: 8.0
 
             // Derivative guard: if the previous correction is already moving flow toward the
             // target, reduce the multiplier to 30% to avoid stacking corrections faster than
-            // the system can respond (dead-time over-correction). Full multiplier when flow
-            // is still diverging or on the first correction of the stage.
+            // the system can respond (dead-time over-correction).
             val lastFlow = lastCorrectionFlowGps
             val movingTowardTarget = when {
                 error > deadband -> lastFlow != null && flow < lastFlow
@@ -667,7 +680,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }.coerceIn(safetyConfig.minPressureBar, cap)
 
             if (nextPressure != currentPressure || state.commandedPressureBar == null) {
-                commandPressure(nextPressure, nowMs, source = stageName)
+                // Only advance the correction timer when the LUT actually accepts the command.
+                // If it throttles (too soon after last tap), leave lastFlowCorrectionMs unchanged
+                // so we retry on the next check instead of wasting the correction budget.
+                val accepted = commandPressure(nextPressure, nowMs, source = stageName)
+                if (accepted) {
+                    lastFlowCorrectionMs = nowMs
+                    lastCorrectionFlowGps = flow
+                }
+            } else {
+                // In deadband — no pressure change needed, but still advance the timer so we
+                // don't check again on every single BLE notification.
                 lastFlowCorrectionMs = nowMs
                 lastCorrectionFlowGps = flow
             }
@@ -751,12 +774,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         nowMs: Long,
         force: Boolean = false,
         source: String
-    ) {
+    ): Boolean {
         val state = _uiState.value
         val service = EbarAccessibilityService.current()
         if (service == null) {
             fail("Accessibility service unavailable before pressure command", attemptStop = false)
-            return
+            return false
         }
 
         val result = lutManager.requestPressure(
@@ -768,17 +791,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         if (!result.accepted) {
-            _uiState.update {
-                it.copy(lastPressureCommand = result.message)
-            }
-            return
+            _uiState.update { it.copy(lastPressureCommand = result.message) }
+            return false
         }
 
-        val point = result.point ?: return
+        val point = result.point ?: return false
         val tapped = service.dispatchTap(point.x, point.y)
         if (!tapped) {
             fail("Failed to dispatch pressure tap", attemptStop = false)
-            return
+            return false
         }
 
         val pressure = result.pressureBar ?: requestedPressureBar
@@ -793,6 +814,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             "$source commanded ${pressure.format(2)} bar",
             pressureBar = pressure
         )
+        return true
     }
 
     private fun sendStop(
@@ -879,7 +901,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun appendSample(nowMs: Long, weight: Double, flow: Double) {
+    private fun appendSample(nowMs: Long, weight: Double, flow: Double, altFlowGps: Double? = null) {
         val state = _uiState.value
         val shotStart = shotStartMs ?: nowMs
         val sample = ShotSample(
@@ -887,7 +909,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             weightG = weight,
             flowGps = flow,
             commandedPressureBar = state.commandedPressureBar,
-            stageName = state.currentStageName
+            stageName = state.currentStageName,
+            altFlowGps = altFlowGps
         )
         _uiState.update { it.copy(samples = (it.samples + sample).takeLast(MAX_LOG_ITEMS)) }
     }

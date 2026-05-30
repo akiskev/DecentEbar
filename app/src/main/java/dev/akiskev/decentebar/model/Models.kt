@@ -91,7 +91,8 @@ data class ShotSample(
     val weightG: Double,
     val flowGps: Double,
     val commandedPressureBar: Double?,
-    val stageName: String
+    val stageName: String,
+    val altFlowGps: Double? = null  // software-estimated flow when scale is connected, for comparison
 )
 
 @Serializable
@@ -109,7 +110,8 @@ data class ShotLog(
     val startedAtMs: Long?,
     val stoppedAtMs: Long?,
     val samples: List<ShotSample>,
-    val events: List<ShotEvent>
+    val events: List<ShotEvent>,
+    val stageTargetFlows: Map<String, Double> = emptyMap()
 )
 
 @Serializable
@@ -189,7 +191,7 @@ data class SafetyConfig(
     val maxPressureBar: Double = 12.0,
     val maxReadableWeightG: Double = 150.0,
     val maxFlowGps: Double = 8.0,
-    val pressureCommandIntervalMs: Long = 400L,
+    val pressureCommandIntervalMs: Long = 250L,
     val minPressureDeltaBar: Double = 0.15,
     val missingWeightTimeoutMs: Long = 2_000L,
     val fallbackStopRx: Double = 2860.0 / BuiltInPressureLut.REFERENCE_WIDTH,
@@ -276,10 +278,7 @@ object DefaultProfiles {
                 type = StageType.FLOW_LIMITED_PRESSURE,
                 pressureCapBar = 9.0,
                 targetFlowGps = 1.9,
-                flowDeadbandGps = 0.1,
-                pressureStepBar = 0.2,
-                correctionIntervalMs = 600L,
-                pressureStepMultiplierMax = 8.0,
+                // flowDeadbandGps / pressureStepBar / correctionIntervalMs left null → auto-tuned
                 exit = ExitCondition(weightGte = 27.0),
                 safety = StageSafety(maxStageTimeMs = 35_000L)
             ),
@@ -288,10 +287,7 @@ object DefaultProfiles {
                 type = StageType.FLOW_LIMITED_PRESSURE,
                 pressureCapBar = 8.0,
                 targetFlowGps = 1.6,
-                flowDeadbandGps = 0.1,
-                pressureStepBar = 0.2,
-                correctionIntervalMs = 600L,
-                pressureStepMultiplierMax = 8.0,
+                // flowDeadbandGps / pressureStepBar / correctionIntervalMs left null → auto-tuned
                 rampEndPressureBar = 5.0,
                 rampStartWeightG = 28.0,
                 rampEndWeightG = 35.0,
