@@ -7,6 +7,7 @@ import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.LutValidationResult
 import dev.akiskev.decentebar.model.PressureLut
 import dev.akiskev.decentebar.model.ShotEvent
+import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.ShotSample
 
@@ -38,7 +39,9 @@ data class MainUiState(
     val events: List<ShotEvent> = emptyList(),
     val videoExportProgress: Float? = null,
     val scaleConnectionState: ScaleConnectionState = ScaleConnectionState.DISCONNECTED,
-    val scaleBatteryPercent: Int? = null
+    val scaleBatteryPercent: Int? = null,
+    val importedShotLog: ShotLog? = null,
+    val importShotLogMessage: String = "",
 ) {
     val isArmed: Boolean
         get() = controllerState == ControllerState.ARMED ||

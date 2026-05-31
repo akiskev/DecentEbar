@@ -65,6 +65,7 @@ class ProfileRepository(context: Context) {
 
 object ShotLogCodec {
     fun encode(log: ShotLog): String = JsonCodec.json.encodeToString(log)
+    fun decode(json: String): ShotLog = JsonCodec.json.decodeFromString(json)
 }
 
 object JsonCodec {

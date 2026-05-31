@@ -21,6 +21,7 @@ object ShotHtmlExporter {
         val targetFlowsJs = stageNames.joinToString(",") { name ->
             log.stageTargetFlows[name]?.let { "%.3f".format(it) } ?: "null"
         }
+        val embeddedJson = ShotLogCodec.encode(log).replace("</", "<\\/")
 
         return """<!DOCTYPE html>
 <html lang="en">
@@ -30,26 +31,26 @@ object ShotHtmlExporter {
 <title>${escHtml(title)}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#111;color:#ddd;padding:20px;max-width:1100px}
-h1{font-size:1.35em;font-weight:600;color:#fff;margin-bottom:4px}
-.meta{font-size:.82em;color:#777;margin-bottom:20px}
-.chart-wrap{position:relative;background:#1a1a1a;border-radius:10px;padding:16px 12px 8px;margin-bottom:24px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#120F0D;color:rgba(252,243,230,0.85);padding:20px;max-width:1100px}
+h1{font-size:1.35em;font-weight:600;color:rgba(252,243,230,0.95);margin-bottom:4px}
+.meta{font-size:.82em;color:rgba(252,243,230,0.50);margin-bottom:20px}
+.chart-wrap{position:relative;background:rgba(24,19,17,0.88);border-radius:10px;padding:16px 12px 8px;margin-bottom:24px}
 .chart-wrap canvas{display:block;width:100%!important}
-h2{font-size:.8em;font-weight:600;color:#888;margin:24px 0 10px;text-transform:uppercase;letter-spacing:.07em}
+h2{font-size:.8em;font-weight:600;color:rgba(252,243,230,0.55);margin:24px 0 10px;text-transform:uppercase;letter-spacing:.07em}
 table{width:100%;border-collapse:collapse;font-size:.78em}
-th{text-align:left;padding:6px 10px;background:#181818;color:#666;font-weight:500;border-bottom:1px solid #2a2a2a}
-td{padding:6px 10px;border-bottom:1px solid #1a1a1a;vertical-align:top}
-tr:hover td{background:#161616}
-.t{color:#555;font-variant-numeric:tabular-nums;white-space:nowrap}
-.msg{color:#bbb}
+th{text-align:left;padding:6px 10px;background:rgba(24,19,17,0.60);color:rgba(252,243,230,0.45);font-weight:500;border-bottom:1px solid rgba(252,243,230,0.12)}
+td{padding:6px 10px;border-bottom:1px solid rgba(252,243,230,0.08);vertical-align:top}
+tr:hover td{background:rgba(24,19,17,0.50)}
+.t{color:rgba(252,243,230,0.42);font-variant-numeric:tabular-nums;white-space:nowrap}
+.msg{color:rgba(252,243,230,0.75)}
 .badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:.75em;font-weight:600;white-space:nowrap}
-.b-STAGE_EXIT{background:#0e2e0e;color:#3d3}
-.b-FIRST_DROP{background:#2e0e0e;color:#d44}
-.b-INFO{background:#0e1a2e;color:#59d}
-.b-STOP_COMMAND{background:#2e1a0e;color:#d94}
-.b-PRESSURE_COMMAND{background:#1e1e0a;color:#99a}
-.b-STATE_TRANSITION{background:#160e2e;color:#97d}
-.b-default{background:#1e1e1e;color:#888}
+.b-STAGE_EXIT{background:rgba(106,158,136,0.16);color:#6A9E88}
+.b-FIRST_DROP{background:rgba(196,91,91,0.16);color:#D45B5B}
+.b-INFO{background:rgba(201,165,90,0.16);color:#E8CE85}
+.b-STOP_COMMAND{background:rgba(176,115,85,0.16);color:#B07355}
+.b-PRESSURE_COMMAND{background:rgba(176,115,85,0.12);color:#C9A55A}
+.b-STATE_TRANSITION{background:rgba(201,165,90,0.12);color:#E8CE85}
+.b-default{background:rgba(24,19,17,0.60);color:rgba(252,243,230,0.50)}
 </style>
 </head>
 <body>
@@ -70,6 +71,7 @@ const E=$eventsJs;
 const TARGETS=[$targetFlowsJs];
 ${chartScript()}
 </script>
+<script type="application/json" id="shotlog-data">$embeddedJson</script>
 </body>
 </html>"""
     }
@@ -154,12 +156,11 @@ ${chartScript()}
     }
 
     private fun chartScript(): String = """
-const PALETTE=['rgba(60,80,160,0.18)','rgba(50,140,80,0.18)','rgba(160,60,60,0.18)','rgba(150,140,50,0.18)','rgba(50,140,150,0.18)','rgba(110,60,160,0.18)'];
+const PALETTE=['rgba(176,115,85,0.08)','rgba(201,165,90,0.07)','rgba(232,206,133,0.06)','rgba(106,158,136,0.07)','rgba(106,140,158,0.07)','rgba(158,126,106,0.06)'];
 const times=D.map(d=>d[0]/1000);
 const stageIdxs=D.map(d=>d[4]);
 const hasAlt=D.some(d=>d[5]!==null);
 const hasTargets=TARGETS.some(t=>t!==null);
-// Build stage bands using actual time values
 const bands=[];
 let last=-1;
 for(let i=0;i<D.length;i++){
@@ -179,9 +180,6 @@ const bandsPlugin={
       if(x2<=x1)return;
       ctx.fillStyle=PALETTE[b.ci%PALETTE.length];
       ctx.fillRect(x1,top,x2-x1,bottom-top);
-      ctx.save();ctx.fillStyle='rgba(160,160,160,0.6)';ctx.font='10px sans-serif';ctx.textAlign='center';
-      ctx.fillText(b.name,Math.max(x1+4,Math.min(x2-4,(x1+x2)/2)),top+11);
-      ctx.restore();
     });
   }
 };
@@ -192,22 +190,21 @@ const dropPlugin={
     if(!drop)return;
     const{ctx,chartArea:{top,bottom},scales:{x}}=chart;
     const px=x.getPixelForValue(drop[0]/1000);
-    ctx.save();ctx.strokeStyle='rgba(210,70,70,0.8)';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
+    ctx.save();ctx.strokeStyle='rgba(196,91,91,0.70)';ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
     ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();ctx.restore();
   }
 };
-// Datasets use {x,y} pairs so the linear x-axis spaces points by real time
 const xyFlow=times.map((t,i)=>({x:t,y:D[i][1]}));
 const xyPressure=times.map((t,i)=>({x:t,y:D[i][2]}));
 const xyWeight=times.map((t,i)=>({x:t,y:D[i][3]}));
 const xyAlt=hasAlt?times.map((t,i)=>({x:t,y:D[i][5]})):null;
 const xyTarget=hasTargets?times.map((t,i)=>{const v=TARGETS[stageIdxs[i]];return v!=null?{x:t,y:v}:null;}):null;
 const datasets=[
-  {label:hasAlt?'Scale Flow (g/s)':'Flow (g/s)',data:xyFlow,borderColor:'#5b9cf6',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',tension:0.2},
+  {label:hasAlt?'Scale Flow (g/s)':'Flow (g/s)',data:xyFlow,borderColor:'#C9A55A',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',tension:0.2},
   ...(hasAlt?[{label:'Calc Flow (g/s)',data:xyAlt,borderColor:'#9b6fda',backgroundColor:'transparent',borderWidth:1,borderDash:[4,3],pointRadius:0,yAxisID:'yL',tension:0.2,spanGaps:true}]:[]),
-  {label:'Pressure (bar)',data:xyPressure,borderColor:'#f6a25b',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',spanGaps:true},
-  {label:'Weight (g)',data:xyWeight,borderColor:'#5bf6a2',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yR'},
-  ...(hasTargets?[{label:'Target Flow (g/s)',data:xyTarget,borderColor:'rgba(255,193,7,0.65)',backgroundColor:'transparent',borderWidth:1,borderDash:[4,3],pointRadius:0,yAxisID:'yL',spanGaps:false,tension:0}]:[])
+  {label:'Pressure (bar)',data:xyPressure,borderColor:'#B07355',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',spanGaps:true},
+  {label:'Weight (g)',data:xyWeight,borderColor:'#6A9E88',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yR'},
+  ...(hasTargets?[{label:'Target Flow (g/s)',data:xyTarget,borderColor:'rgba(232,206,133,0.70)',backgroundColor:'transparent',borderWidth:1,borderDash:[8,8],pointRadius:0,yAxisID:'yL',spanGaps:false,tension:0}]:[])
 ];
 const chart=new Chart(document.getElementById('c'),{
   type:'line',
@@ -216,13 +213,13 @@ const chart=new Chart(document.getElementById('c'),{
     animation:false,responsive:true,maintainAspectRatio:true,aspectRatio:4,
     interaction:{mode:'index',intersect:false},
     plugins:{
-      legend:{labels:{color:'#999',boxWidth:12,font:{size:11}}},
-      tooltip:{backgroundColor:'#222',titleColor:'#999',bodyColor:'#ddd',borderColor:'#333',borderWidth:1}
+      legend:{labels:{color:'rgba(252,243,230,0.62)',boxWidth:12,font:{size:11}}},
+      tooltip:{backgroundColor:'rgba(24,19,17,0.95)',titleColor:'rgba(252,243,230,0.62)',bodyColor:'rgba(252,243,230,0.90)',borderColor:'rgba(252,243,230,0.16)',borderWidth:1}
     },
     scales:{
-      x:{type:'linear',title:{display:true,text:'Time (s)',color:'#555'},ticks:{color:'#555',maxTicksLimit:20},grid:{color:'#222'}},
-      yL:{position:'left',title:{display:true,text:'Flow (g/s) / Pressure (bar)',color:'#555'},ticks:{color:'#555'},grid:{color:'#222'},min:0},
-      yR:{position:'right',title:{display:true,text:'Weight (g)',color:'#555'},ticks:{color:'#555'},grid:{drawOnChartArea:false}}
+      x:{type:'linear',title:{display:true,text:'Time (s)',color:'rgba(252,243,230,0.42)'},ticks:{color:'rgba(252,243,230,0.55)',maxTicksLimit:20},grid:{color:'rgba(252,243,230,0.08)'}},
+      yL:{position:'left',title:{display:true,text:'Flow (g/s) / Pressure (bar)',color:'rgba(252,243,230,0.42)'},ticks:{color:'rgba(252,243,230,0.55)'},grid:{color:'rgba(252,243,230,0.08)'},min:0},
+      yR:{position:'right',title:{display:true,text:'Weight (g)',color:'rgba(252,243,230,0.42)'},ticks:{color:'rgba(252,243,230,0.55)'},grid:{drawOnChartArea:false}}
     }
   },
   plugins:[bandsPlugin,dropPlugin]

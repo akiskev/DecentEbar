@@ -90,6 +90,7 @@ import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.ShotEvent
 import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.storage.ShotHtmlExporter
+import dev.akiskev.decentebar.storage.ShotLogCodec
 import dev.akiskev.decentebar.storage.ShotVideoExporter
 import dev.akiskev.decentebar.model.ShotSample
 import dev.akiskev.decentebar.model.StageSafety
@@ -1070,6 +1071,63 @@ private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
         viewModel.exportShotVideo(uri, fmt)
     }
 
+    var pendingImportedLogJson by remember { mutableStateOf<String?>(null) }
+    var pendingImportedLogHtml by remember { mutableStateOf<String?>(null) }
+    var pendingImportedFilenameBase by remember { mutableStateOf("") }
+
+    val saveImportedHtmlLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/html")
+    ) { uri ->
+        val html = pendingImportedLogHtml ?: return@rememberLauncherForActivityResult
+        pendingImportedLogHtml = null
+        if (uri == null) {
+            viewModel.setLogMessage("Saved JSON (HTML skipped)")
+            return@rememberLauncherForActivityResult
+        }
+        if (writeJsonToUri(context, uri, html)) {
+            viewModel.setLogMessage("Saved JSON + HTML report")
+        } else {
+            viewModel.setLogMessage("Saved JSON, HTML write failed")
+        }
+    }
+
+    val saveImportedJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val json = pendingImportedLogJson ?: return@rememberLauncherForActivityResult
+        pendingImportedLogJson = null
+        if (uri == null) { pendingImportedLogHtml = null; return@rememberLauncherForActivityResult }
+        if (!writeJsonToUri(context, uri, json)) {
+            viewModel.setLogMessage("Save failed")
+            pendingImportedLogHtml = null
+            return@rememberLauncherForActivityResult
+        }
+        val html = pendingImportedLogHtml
+        if (html != null) {
+            saveImportedHtmlLauncher.launch("$pendingImportedFilenameBase.html")
+        } else {
+            viewModel.setLogMessage("Saved imported log")
+        }
+    }
+
+    var pendingImportedVideoFormat by remember { mutableStateOf<ShotVideoExporter.Format?>(null) }
+
+    val saveImportedVideoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("video/mp4")
+    ) { uri ->
+        val fmt = pendingImportedVideoFormat ?: return@rememberLauncherForActivityResult
+        val log = state.importedShotLog ?: return@rememberLauncherForActivityResult
+        pendingImportedVideoFormat = null
+        if (uri == null) return@rememberLauncherForActivityResult
+        viewModel.exportShotVideo(uri, fmt, log)
+    }
+
+    val importLogLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) viewModel.importShotLogFromUri(uri)
+    }
+
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -1096,6 +1154,11 @@ private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                     }) { Text("Save to File") }
                     OutlinedButton(onClick = viewModel::resetShotLog) { Text("Clear") }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        importLogLauncher.launch(arrayOf("application/json", "text/html", "*/*"))
+                    }) { Text("Load Log") }
+                }
                 Spacer(Modifier.height(4.dp))
                 VideoExportRow(
                     progress = state.videoExportProgress,
@@ -1109,6 +1172,9 @@ private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                 )
                 Text("${state.samples.size} samples | ${state.events.size} events")
                 MessageLine(state.logMessage)
+                if (state.importShotLogMessage.isNotBlank()) {
+                    MessageLine(state.importShotLogMessage)
+                }
             }
             Panel("Events", modifier = Modifier.weight(1f), fillContent = true) {
                 LazyColumn(Modifier.fillMaxSize()) {
@@ -1122,6 +1188,42 @@ private fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
             modifier = Modifier.weight(0.5f).fillMaxHeight(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            val importedLog = state.importedShotLog
+            if (importedLog != null) {
+                val durationSec = if (importedLog.startedAtMs != null && importedLog.stoppedAtMs != null) {
+                    " · ${"%.1f".format((importedLog.stoppedAtMs - importedLog.startedAtMs) / 1000.0)}s"
+                } else ""
+                Panel("Imported Shot Log") {
+                    Text(
+                        "${importedLog.profileName} · ${importedLog.samples.size} samples · ${importedLog.events.size} events$durationSec",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            val json = ShotLogCodec.encode(importedLog)
+                            val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                            val base = "${sanitizeFilename(importedLog.profileName)}-$ts"
+                            pendingImportedLogJson = json
+                            pendingImportedLogHtml = ShotHtmlExporter.export(importedLog)
+                            pendingImportedFilenameBase = base
+                            saveImportedJsonLauncher.launch("$base.json")
+                        }) { Text("Save to File") }
+                        OutlinedButton(onClick = viewModel::clearImportedShotLog) { Text("Clear") }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    VideoExportRow(
+                        progress = state.videoExportProgress,
+                        hasData = true,
+                        onExport = { fmt ->
+                            val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                            val base = "${sanitizeFilename(importedLog.profileName)}-$ts"
+                            pendingImportedVideoFormat = fmt
+                            saveImportedVideoLauncher.launch("$base.mp4")
+                        }
+                    )
+                }
+            }
             Panel("Recent Samples", modifier = Modifier.weight(1f), fillContent = true) {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(state.samples.takeLast(40).reversed()) { sample ->

@@ -5,45 +5,83 @@ import android.graphics.Color
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import dev.akiskev.decentebar.model.ShotEventType
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotSample
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
 
-// Material Design dark-theme palette
-private object MD {
+// ── Espresso Warm design tokens ────────────────────────────────────────────────
+private object EW {
     // Surfaces
-    val background = Color.rgb(18, 18, 18)          // #121212
+    val background  = Color.BLACK
+    val cardBg      = Color.rgb(10, 10, 10)               // card fill (opaque)
 
-    // Data lines — MD accent colors
-    val flow     = Color.rgb(68, 138, 255)           // Blue A200  #448AFF
-    val pressure = Color.rgb(255, 110, 64)           // Deep Orange A200  #FF6E40
-    val weight   = Color.rgb(100, 255, 218)          // Teal A200  #64FFDA
-    val target   = Color.rgb(255, 193, 7)            // Amber 500  #FFC107  (target-flow line)
+    // Data series
+    val flow        = Color.rgb(201, 165,  90)            // #C9A55A  crema gold
+    val pressure    = Color.rgb(176, 115,  85)            // #B07355  terracotta
+    val weight      = Color.rgb(106, 158, 136)            // #6A9E88  sage
+    val target      = Color.rgb(232, 206, 133)            // #E8CE85  light gold
 
-    // First-drop marker
-    val firstDrop = Color.argb(200, 239, 83, 80)     // Red 400 #EF5350
+    // Markers
+    val firstDrop   = Color.argb(180, 196,  91,  91)      // muted red
+
+    // Text
+    fun textHigh()   = Color.argb(230, 252, 243, 230)     // 0.90 opacity
+    fun textMed()    = Color.argb(158, 252, 243, 230)     // 0.62
+    fun textMuted()  = Color.argb(107, 252, 243, 230)     // 0.42
 
     // Structure
-    fun grid()  = Color.argb(18,  255, 255, 255)     // 7% white
-    fun axis()  = Color.argb(59,  255, 255, 255)     // 23% white
-    fun text87()= Color.argb(222, 255, 255, 255)     // high-emphasis
-    fun text60()= Color.argb(153, 255, 255, 255)     // medium-emphasis
-    fun text38()= Color.argb(97,  255, 255, 255)     // disabled/hint
+    fun grid()       = Color.argb( 20, 252, 243, 230)     // 0.08
+    fun gridMajor()  = Color.argb( 31, 252, 243, 230)     // 0.12
+    fun axis()       = Color.argb( 41, 252, 243, 230)     // 0.16
+    fun tick()       = Color.argb(140, 252, 243, 230)     // 0.55
+    fun cardBorder() = Color.argb( 51, 252, 243, 230)     // 0.20
+    fun divider()    = Color.argb( 36, 252, 243, 230)     // card column divider
 
-    // Stage band fills — MD 900-series hues at 16% opacity
-    val bands = intArrayOf(
-        Color.argb(41, 26,  35,  126),   // Indigo 900
-        Color.argb(41, 27,  94,  32 ),   // Green 900
-        Color.argb(41, 183, 28,  28 ),   // Red 900
-        Color.argb(41, 230, 81,  0  ),   // Deep Orange 900
-        Color.argb(41, 0,   96,  100),   // Cyan 900
-        Color.argb(41, 74,  20,  140)    // Purple 900
+    // Badge
+    fun badgeBg()    = Color.argb( 36, 201, 165,  90)
+    fun badgeBorder()= Color.argb( 71, 232, 206, 133)
+
+    // Stage palette — one warm/cool hue per stage slot
+    private val stageCols = arrayOf(
+        intArrayOf(176, 115,  85),   // slot 0 – terracotta   (Preinfusion)
+        intArrayOf(201, 165,  90),   // slot 1 – gold          (Wait)
+        intArrayOf(232, 206, 133),   // slot 2 – light gold    (Ramp)
+        intArrayOf(106, 158, 136),   // slot 3 – sage          (Main)
+        intArrayOf(106, 140, 158),   // slot 4 – blue-sage     (Fade)
+        intArrayOf(158, 126, 106)    // slot 5 – warm grey     (extra)
     )
+
+    // Full-height tint — 7% opacity, drawn under chart lines as context
+    fun bandFill(ci: Int): Int {
+        val c = stageCols[ci % stageCols.size]
+        return Color.argb(18, c[0], c[1], c[2])
+    }
+
+    // Phase-strip fill — active 22%, past 15%, future 10%
+    fun stripFill(ci: Int, state: StripState): Int {
+        val c = stageCols[ci % stageCols.size]
+        val alpha = when (state) {
+            StripState.ACTIVE -> 56
+            StripState.PAST   -> 36
+            StripState.FUTURE -> 22
+        }
+        return Color.argb(alpha, c[0], c[1], c[2])
+    }
+
+    fun stripText(ci: Int): Int {
+        val c = stageCols[ci % stageCols.size]
+        return Color.argb(200, c[0], c[1], c[2])
+    }
 }
 
+private enum class StripState { PAST, ACTIVE, FUTURE }
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
 class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private val h: Int) {
 
     private val shotDurationMs: Long = run {
@@ -52,19 +90,23 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         max(1L, e - s)
     }
 
-    // Layout
-    private val padL = (w * 0.072f).toInt()
-    private val padR = (w * 0.072f).toInt()
-    private val padT = (h * 0.12f).toInt()
-    private val padB = (h * 0.10f).toInt()
-    private val plotL = padL.toFloat()
-    private val plotR = (w - padR).toFloat()
-    private val plotT = padT.toFloat()
-    private val plotB = (h - padB).toFloat()
+    // ── Layout dimensions ────────────────────────────────────────────────────
+    private val padL       = w * 0.072f
+    private val padR       = w * 0.092f
+    private val titleAreaH = h * 0.086f     // title row + time
+    private val stripH     = h * 0.034f     // phase strip above chart
+    private val xAxisH     = h * 0.040f     // x-axis tick label row
+    private val cardH      = h * 0.076f     // bottom metrics card
+    private val cardPad    = h * 0.042f     // gap between plot bottom and card (must clear xAxisH labels)
+
+    private val plotL = padL
+    private val plotR = w - padR
+    private val plotT = titleAreaH + stripH
+    private val plotB = h.toFloat() - xAxisH - cardH - cardPad * 2f
     private val plotW = plotR - plotL
     private val plotH = plotB - plotT
 
-    // Data ranges
+    // ── Data ranges ──────────────────────────────────────────────────────────
     private val maxLeftY: Float = run {
         val maxP = log.samples.mapNotNull { it.commandedPressureBar }.maxOrNull() ?: 9.0
         val maxF = log.samples.maxOfOrNull { it.flowGps } ?: 3.0
@@ -75,87 +117,185 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         (ceil(mw / 5) * 5).toFloat().coerceAtLeast(10f)
     }
 
-    private data class Band(val name: String, val startMs: Long, val endMs: Long, val color: Int, val targetFlow: Double?)
+    // ── Stage bands ──────────────────────────────────────────────────────────
+    private data class Band(
+        val name: String, val startMs: Long, val endMs: Long,
+        val ci: Int, val targetFlow: Double?
+    )
     private val bands: List<Band> = run {
         val result = mutableListOf<Band>()
-        var lastName = ""
-        var bandStart = 0L
+        var lastName = ""; var bandStart = 0L
         log.samples.forEach { s ->
             if (s.stageName != lastName) {
-                if (lastName.isNotEmpty()) {
-                    result += Band(lastName, bandStart, s.timeMs,
-                        MD.bands[result.size % MD.bands.size],
-                        log.stageTargetFlows[lastName])
-                }
-                lastName = s.stageName
-                bandStart = s.timeMs
+                if (lastName.isNotEmpty()) result += Band(
+                    lastName, bandStart, s.timeMs, result.size,
+                    log.stageTargetFlows[lastName]
+                )
+                lastName = s.stageName; bandStart = s.timeMs
             }
         }
-        if (lastName.isNotEmpty()) result += Band(lastName, bandStart,
-            log.samples.lastOrNull()?.timeMs ?: bandStart,
-            MD.bands[result.size % MD.bands.size],
-            log.stageTargetFlows[lastName])
+        if (lastName.isNotEmpty()) result += Band(
+            lastName, bandStart, log.samples.lastOrNull()?.timeMs ?: bandStart,
+            result.size, log.stageTargetFlows[lastName]
+        )
         result
     }
 
     private val firstDropMs: Long? = log.events
         .firstOrNull { it.type == ShotEventType.FIRST_DROP }?.timeMs
 
-    // Paints
-    private val lw = (h * 0.003f)
-    private val bgPaint      = Paint().apply { color = MD.background }
-    private val gridPaint    = Paint().apply { color = MD.grid(); strokeWidth = 1f; style = Paint.Style.STROKE }
-    private val axisPaint    = Paint().apply { color = MD.axis(); strokeWidth = 1.5f; style = Paint.Style.STROKE }
-    private val bandPaint    = Paint().apply { style = Paint.Style.FILL }
-    private val flowPaint    = Paint().apply { color = MD.flow; strokeWidth = lw; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
-    private val pressurePaint= Paint().apply { color = MD.pressure; strokeWidth = lw; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
-    private val weightPaint  = Paint().apply { color = MD.weight; strokeWidth = lw; style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true }
-    private val targetPaint  = Paint().apply {
-        color = Color.argb(160, 255, 193, 7)  // Amber 500 at 63% — dashed target-flow line
-        strokeWidth = lw * 0.7f
-        style = Paint.Style.STROKE
-        isAntiAlias = true
-        pathEffect = DashPathEffect(floatArrayOf(h * 0.012f, h * 0.008f), 0f)
-    }
-    private val dropPaint    = Paint().apply { color = MD.firstDrop; strokeWidth = 1.5f; style = Paint.Style.STROKE }
-    private val labelPaint   = Paint().apply { color = MD.text60(); textSize = h * 0.028f; isAntiAlias = true; typeface = Typeface.MONOSPACE }
-    private val stageLabelPaint = Paint().apply { color = MD.text38(); textSize = h * 0.026f; isAntiAlias = true; textAlign = Paint.Align.CENTER }
-    private val valuePaint   = Paint().apply { color = MD.text87(); textSize = h * 0.038f; isAntiAlias = true; typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) }
-    private val titlePaint   = Paint().apply { color = MD.text87(); textSize = h * 0.05f; isAntiAlias = true; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
-    private val dimPaint     = Paint().apply { color = MD.text60(); textSize = h * 0.032f; isAntiAlias = true }
-    private val flowDotPaint     = Paint().apply { color = MD.flow; style = Paint.Style.FILL; isAntiAlias = true }
-    private val pressureDotPaint = Paint().apply { color = MD.pressure; style = Paint.Style.FILL; isAntiAlias = true }
-    private val weightDotPaint   = Paint().apply { color = MD.weight; style = Paint.Style.FILL; isAntiAlias = true }
+    // ── Paint objects ────────────────────────────────────────────────────────
+    // Using min(w,h) as base for line widths so they scale correctly across
+    // 16:9, 1:1, and 9:16 formats.
+    private val base = min(w, h).toFloat()
 
+    private val bgPaint        = Paint().apply { color = EW.background }
+    private val bandFillPaint  = Paint().apply { style = Paint.Style.FILL }
+    private val stripFillPaint = Paint().apply { style = Paint.Style.FILL }
+    private val gridPaint      = Paint().apply { color = EW.grid();     strokeWidth = 1f; style = Paint.Style.STROKE }
+    private val gridMajorPaint = Paint().apply { color = EW.gridMajor(); strokeWidth = 1f; style = Paint.Style.STROKE }
+    private val axisPaint      = Paint().apply { color = EW.axis();     strokeWidth = 1.5f; style = Paint.Style.STROKE }
+    private val stripBorderPaint = Paint().apply { color = EW.axis();   strokeWidth = 1f; style = Paint.Style.STROKE }
+    private val dropPaint      = Paint().apply { color = EW.firstDrop; strokeWidth = 1.5f; style = Paint.Style.STROKE }
+
+    private val flowPaint = Paint().apply {
+        color = EW.flow; strokeWidth = base * 0.00278f   // ~3.0 px at 1080
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true
+    }
+    private val pressurePaint = Paint().apply {
+        color = EW.pressure; strokeWidth = base * 0.00231f  // ~2.5 px at 1080
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true
+    }
+    private val weightPaint = Paint().apply {
+        color = EW.weight; strokeWidth = base * 0.00231f
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; isAntiAlias = true
+    }
+    private val targetPaint = Paint().apply {
+        color = Color.argb(178, 232, 206, 133)  // #E8CE85 at 70%
+        strokeWidth = base * 0.00139f           // ~1.5 px at 1080
+        style = Paint.Style.STROKE; isAntiAlias = true
+        pathEffect = DashPathEffect(floatArrayOf(base * 0.0074f, base * 0.0074f), 0f)
+    }
+
+    private val flowDotPaint    = Paint().apply { color = EW.flow;     style = Paint.Style.FILL; isAntiAlias = true }
+    private val pressureDotPaint= Paint().apply { color = EW.pressure; style = Paint.Style.FILL; isAntiAlias = true }
+    private val weightDotPaint  = Paint().apply { color = EW.weight;   style = Paint.Style.FILL; isAntiAlias = true }
+    private val dotR            = base * 0.0083f   // ~9 px flow dot
+    private val dotRSm          = base * 0.0069f   // ~7.5 px pressure/weight
+
+    private val tickPaint = Paint().apply {
+        color = EW.tick(); textSize = h * 0.026f; isAntiAlias = true; typeface = Typeface.MONOSPACE
+    }
+    private val stageLabelPaint = Paint().apply {
+        textSize = h * 0.021f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+    }
+    private val titlePaint = Paint().apply {
+        color = EW.textHigh(); textSize = h * 0.044f; isAntiAlias = true
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+    }
+    private val timePaint = Paint().apply {
+        color = EW.textMed(); textSize = h * 0.036f; isAntiAlias = true
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
+    }
+    private val cardBgPaint = Paint().apply {
+        color = EW.cardBg; style = Paint.Style.FILL; isAntiAlias = true
+    }
+    private val cardBorderPaint = Paint().apply {
+        color = EW.cardBorder(); strokeWidth = 1f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
+    private val cardDividerPaint = Paint().apply {
+        color = EW.divider(); strokeWidth = 1f; style = Paint.Style.STROKE
+    }
+    private val metricLabelPaint = Paint().apply {
+        color = EW.textMuted(); textSize = h * 0.023f; isAntiAlias = true
+        textAlign = Paint.Align.CENTER
+    }
+    private val metricValuePaint = Paint().apply {
+        textSize = h * 0.035f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    }
+    private val legendPaint = Paint().apply {
+        color = EW.textMuted(); textSize = h * 0.021f; isAntiAlias = true
+    }
+    private val badgePaint    = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
+    private val badgeBorder   = Paint().apply { strokeWidth = 1f; style = Paint.Style.STROKE; isAntiAlias = true }
+    private val badgeTextPaint= Paint().apply {
+        color = EW.target; textSize = h * 0.021f; isAntiAlias = true
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+    }
+
+    // ── Entry point ──────────────────────────────────────────────────────────
     fun render(canvas: Canvas, frameTimeMs: Long) {
-        val visibleSamples = log.samples.filter { it.timeMs <= frameTimeMs }
+        val visible = log.samples.filter { it.timeMs <= frameTimeMs }
         canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bgPaint)
-        drawBands(canvas, frameTimeMs)
+        drawBandFills(canvas, frameTimeMs)
+        drawPhaseStrip(canvas, frameTimeMs)
         drawGrid(canvas)
         drawAxes(canvas)
         drawFirstDrop(canvas, frameTimeMs)
         drawTargetFlowLines(canvas, frameTimeMs)
-        drawLines(canvas, visibleSamples)
-        drawCurrentDots(canvas, visibleSamples)
+        drawLines(canvas, visible)
+        drawCurrentDots(canvas, visible)
         drawAxisLabels(canvas)
-        drawCurrentValues(canvas, visibleSamples, frameTimeMs)
-        drawTitle(canvas, frameTimeMs)
+        drawTitleArea(canvas, frameTimeMs)
+        drawMetricsCard(canvas, visible)
     }
 
+    // ── Coordinate helpers ───────────────────────────────────────────────────
     private fun xPx(timeMs: Long): Float = plotL + (timeMs.toFloat() / shotDurationMs) * plotW
-    private fun yPxLeft(value: Float): Float = plotB - (value / maxLeftY) * plotH
-    private fun yPxRight(value: Float): Float = plotB - (value / maxWeight) * plotH
+    private fun yPxLeft(v: Float) : Float = plotB - (v / maxLeftY) * plotH
+    private fun yPxRight(v: Float): Float = plotB - (v / maxWeight) * plotH
 
-    private fun drawBands(canvas: Canvas, upToMs: Long) {
+    // ── Drawing passes ────────────────────────────────────────────────────────
+
+    /** Very subtle full-height tints — drawn up to current frame for a "reveal" effect. */
+    private fun drawBandFills(canvas: Canvas, frameTimeMs: Long) {
         bands.forEach { b ->
-            if (b.startMs > upToMs) return@forEach
-            bandPaint.color = b.color
-            val x1 = xPx(b.startMs)
-            val x2 = xPx(minOf(b.endMs, upToMs))
-            canvas.drawRect(x1, plotT, x2, plotB, bandPaint)
-            val midX = (x1 + x2) / 2f
-            canvas.drawText(b.name, midX, plotT + stageLabelPaint.textSize + 4f, stageLabelPaint)
+            if (b.startMs > frameTimeMs) return@forEach
+            bandFillPaint.color = EW.bandFill(b.ci)
+            canvas.drawRect(xPx(b.startMs), plotT, xPx(min(b.endMs, frameTimeMs)), plotB, bandFillPaint)
         }
+    }
+
+    /**
+     * Phase strip — thin row between title and chart.
+     * Always shows the full shot structure so the viewer can read the plan
+     * before data arrives. Active stage gets a brighter fill; future stages
+     * are dimmed but visible.
+     */
+    private fun drawPhaseStrip(canvas: Canvas, frameTimeMs: Long) {
+        val sy1 = titleAreaH
+        val sy2 = titleAreaH + stripH
+
+        bands.forEach { b ->
+            val state = when {
+                frameTimeMs < b.startMs -> StripState.FUTURE
+                frameTimeMs <= b.endMs  -> StripState.ACTIVE
+                else                    -> StripState.PAST
+            }
+            stripFillPaint.color = EW.stripFill(b.ci, state)
+            canvas.drawRect(xPx(b.startMs), sy1, xPx(b.endMs), sy2, stripFillPaint)
+
+            // Separator on left edge of each stage (except first)
+            if (b.ci > 0) canvas.drawLine(xPx(b.startMs), sy1, xPx(b.startMs), sy2, stripBorderPaint)
+
+            // Stage label — truncate if segment is too narrow
+            stageLabelPaint.color = EW.stripText(b.ci)
+            val midX = (xPx(b.startMs) + xPx(b.endMs)) / 2f
+            val segW = xPx(b.endMs) - xPx(b.startMs) - 8f
+            val label = if (stageLabelPaint.measureText(b.name) <= segW) b.name
+                        else if (stageLabelPaint.measureText(b.name.take(4)) <= segW) b.name.take(4)
+                        else ""
+            if (label.isNotEmpty()) {
+                canvas.drawText(label, midX, sy2 - stripH * 0.22f, stageLabelPaint)
+            }
+        }
+
+        // Bottom border (divides strip from chart)
+        canvas.drawLine(plotL, sy2, plotR, sy2, axisPaint)
     }
 
     private fun drawGrid(canvas: Canvas) {
@@ -163,15 +303,14 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         var v = step
         while (v < maxLeftY) {
             val y = yPxLeft(v)
-            canvas.drawLine(plotL, y, plotR, y, gridPaint)
+            canvas.drawLine(plotL, y, plotR, y, if (v.toInt() % 4 == 0) gridMajorPaint else gridPaint)
             v += step
         }
         val durSec = (shotDurationMs / 1000).toInt()
         val secStep = if (durSec > 60) 10 else 5
         var s = secStep
         while (s < durSec) {
-            val x = xPx(s * 1000L)
-            canvas.drawLine(x, plotT, x, plotB, gridPaint)
+            canvas.drawLine(xPx(s * 1000L), plotT, xPx(s * 1000L), plotB, gridPaint)
             s += secStep
         }
     }
@@ -182,136 +321,159 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         canvas.drawLine(plotL, plotB, plotR, plotB, axisPaint)
     }
 
-    private fun drawFirstDrop(canvas: Canvas, upToMs: Long) {
+    private fun drawFirstDrop(canvas: Canvas, frameTimeMs: Long) {
         val t = firstDropMs ?: return
-        if (t > upToMs) return
-        val x = xPx(t)
+        if (t > frameTimeMs) return
         dropPaint.pathEffect = DashPathEffect(floatArrayOf(8f, 5f), 0f)
-        canvas.drawLine(x, plotT, x, plotB, dropPaint)
+        canvas.drawLine(xPx(t), plotT, xPx(t), plotB, dropPaint)
         dropPaint.pathEffect = null
     }
 
-    private fun drawTargetFlowLines(canvas: Canvas, upToMs: Long) {
+    private fun drawTargetFlowLines(canvas: Canvas, frameTimeMs: Long) {
         bands.forEach { b ->
             val tf = b.targetFlow ?: return@forEach
-            if (b.startMs > upToMs) return@forEach
-            val x1 = xPx(b.startMs)
-            val x2 = xPx(minOf(b.endMs, upToMs))
-            val y = yPxLeft(tf.toFloat())
-            canvas.drawLine(x1, y, x2, y, targetPaint)
+            if (b.startMs > frameTimeMs) return@forEach
+            canvas.drawLine(xPx(b.startMs), yPxLeft(tf.toFloat()),
+                xPx(min(b.endMs, frameTimeMs)), yPxLeft(tf.toFloat()), targetPaint)
         }
     }
 
     private fun drawLines(canvas: Canvas, samples: List<ShotSample>) {
         if (samples.size < 2) return
-        val flowPath = Path()
-        val pressurePath = Path()
-        val weightPath = Path()
-        var firstFlow = true; var firstPressure = true; var firstWeight = true
+        val fPath = Path(); val pPath = Path(); val wPath = Path()
+        var fFirst = true; var pFirst = true; var wFirst = true
         samples.forEach { s ->
             val x = xPx(s.timeMs)
-            val yFlow = yPxLeft(s.flowGps.toFloat())
-            if (firstFlow) { flowPath.moveTo(x, yFlow); firstFlow = false } else flowPath.lineTo(x, yFlow)
+            val yF = yPxLeft(s.flowGps.toFloat())
+            if (fFirst) { fPath.moveTo(x, yF); fFirst = false } else fPath.lineTo(x, yF)
             s.commandedPressureBar?.let { p ->
                 val yP = yPxLeft(p.toFloat())
-                if (firstPressure) { pressurePath.moveTo(x, yP); firstPressure = false } else pressurePath.lineTo(x, yP)
+                if (pFirst) { pPath.moveTo(x, yP); pFirst = false } else pPath.lineTo(x, yP)
             }
             val yW = yPxRight(s.weightG.toFloat())
-            if (firstWeight) { weightPath.moveTo(x, yW); firstWeight = false } else weightPath.lineTo(x, yW)
+            if (wFirst) { wPath.moveTo(x, yW); wFirst = false } else wPath.lineTo(x, yW)
         }
-        canvas.drawPath(weightPath, weightPaint)
-        canvas.drawPath(pressurePath, pressurePaint)
-        canvas.drawPath(flowPath, flowPaint)
+        // Draw order: weight behind, pressure middle, flow on top
+        canvas.drawPath(wPath, weightPaint)
+        canvas.drawPath(pPath, pressurePaint)
+        canvas.drawPath(fPath, flowPaint)
     }
 
     private fun drawCurrentDots(canvas: Canvas, samples: List<ShotSample>) {
         val last = samples.lastOrNull() ?: return
         val x = xPx(last.timeMs)
-        val r = h * 0.008f
-        canvas.drawCircle(x, yPxLeft(last.flowGps.toFloat()), r, flowDotPaint)
-        last.commandedPressureBar?.let { canvas.drawCircle(x, yPxLeft(it.toFloat()), r, pressureDotPaint) }
-        canvas.drawCircle(x, yPxRight(last.weightG.toFloat()), r, weightDotPaint)
+        canvas.drawCircle(x, yPxLeft(last.flowGps.toFloat()), dotR, flowDotPaint)
+        last.commandedPressureBar?.let { canvas.drawCircle(x, yPxLeft(it.toFloat()), dotRSm, pressureDotPaint) }
+        canvas.drawCircle(x, yPxRight(last.weightG.toFloat()), dotRSm, weightDotPaint)
     }
 
     private fun drawAxisLabels(canvas: Canvas) {
-        labelPaint.textAlign = Paint.Align.RIGHT
+        tickPaint.textAlign = Paint.Align.RIGHT
         val step = if (maxLeftY > 10f) 2f else 1f
         var v = 0f
         while (v <= maxLeftY) {
-            val y = yPxLeft(v) + labelPaint.textSize * 0.35f
-            canvas.drawText(v.toInt().toString(), plotL - 8f, y, labelPaint)
+            canvas.drawText(v.toInt().toString(), plotL - 8f, yPxLeft(v) + tickPaint.textSize * 0.35f, tickPaint)
             v += step
         }
-        labelPaint.textAlign = Paint.Align.LEFT
+        tickPaint.textAlign = Paint.Align.LEFT
         val wStep = if (maxWeight > 20f) 5f else 2f
         var wv = 0f
         while (wv <= maxWeight) {
-            val y = yPxRight(wv) + labelPaint.textSize * 0.35f
-            canvas.drawText(wv.toInt().toString(), plotR + 8f, y, labelPaint)
+            canvas.drawText(wv.toInt().toString(), plotR + 8f, yPxRight(wv) + tickPaint.textSize * 0.35f, tickPaint)
             wv += wStep
         }
-        labelPaint.textAlign = Paint.Align.CENTER
+        tickPaint.textAlign = Paint.Align.CENTER
         val durSec = (shotDurationMs / 1000).toInt()
         val secStep = if (durSec > 60) 10 else 5
         var s = 0
         while (s <= durSec) {
-            val x = xPx(s * 1000L)
-            canvas.drawText("${s}s", x, plotB + labelPaint.textSize + 6f, labelPaint)
+            canvas.drawText("${s}s", xPx(s * 1000L), plotB + xAxisH * 0.62f, tickPaint)
             s += secStep
         }
     }
 
-    private fun drawCurrentValues(canvas: Canvas, samples: List<ShotSample>, frameTimeMs: Long) {
-        val last = samples.lastOrNull()
-        val dotR = h * 0.006f
-        val lineH = valuePaint.textSize * 1.4f
-        val x0 = plotL + plotW * 0.03f
-        var y = plotT + lineH
+    private fun drawTitleArea(canvas: Canvas, frameTimeMs: Long) {
+        val topPad = h * 0.020f
+        val titleY = topPad + titlePaint.textSize
 
-        data class Row(val color: Int, val dot: Paint, val label: String, val value: String)
-        val rows = listOf(
-            Row(MD.flow,     flowDotPaint,     "Flow",     if (last != null) "${"%.2f".format(last.flowGps)} g/s" else "--"),
-            Row(MD.pressure, pressureDotPaint, "Pressure", if (last?.commandedPressureBar != null) "${"%.1f".format(last.commandedPressureBar)} bar" else "--"),
-            Row(MD.weight,   weightDotPaint,   "Weight",   if (last != null) "${"%.1f".format(last.weightG)} g" else "--")
-        )
-        val rowPaint = Paint().apply { isAntiAlias = true; textSize = dimPaint.textSize }
-        rows.forEach { row ->
-            canvas.drawCircle(x0, y - dotR * 0.5f, dotR, row.dot)
-            rowPaint.color = row.color
-            rowPaint.textAlign = Paint.Align.LEFT
-            val label = "${row.label}  "
-            canvas.drawText(label, x0 + dotR * 2.5f, y, rowPaint)
-            valuePaint.color = MD.text87()
-            valuePaint.textAlign = Paint.Align.LEFT
-            canvas.drawText(row.value, x0 + dotR * 2.5f + rowPaint.measureText(label), y, valuePaint)
-            y += lineH
+        // Profile name — left
+        titlePaint.textAlign = Paint.Align.LEFT
+        canvas.drawText(log.profileName, plotL, titleY, titlePaint)
+
+        // Elapsed time — right
+        val sec = frameTimeMs / 1000; val frac = (frameTimeMs % 1000) / 100
+        timePaint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("${sec}.${frac}s", plotR, titleY, timePaint)
+
+        // State badge — pill below the title, left-aligned
+        val activeBand = bands.lastOrNull { it.startMs <= frameTimeMs }
+        if (activeBand != null) {
+            val badgeText = activeBand.name.uppercase()
+            badgeTextPaint.textAlign = Paint.Align.LEFT
+            val hPad = h * 0.016f
+            val vPad = h * 0.008f
+            val bw = badgeTextPaint.measureText(badgeText) + hPad * 2f
+            val bh = badgeTextPaint.textSize + vPad * 2f
+            val bx = plotL
+            val by = titleY + h * 0.014f
+            val rect = RectF(bx, by, bx + bw, by + bh)
+            val r = bh / 2f
+            badgePaint.color = EW.badgeBg()
+            badgeBorder.color = EW.badgeBorder()
+            canvas.drawRoundRect(rect, r, r, badgePaint)
+            canvas.drawRoundRect(rect, r, r, badgeBorder)
+            canvas.drawText(badgeText, bx + hPad, by + bh * 0.72f, badgeTextPaint)
+        }
+
+        // Subtle legend — top right, small dots + labels
+        legendPaint.textAlign = Paint.Align.RIGHT
+        val ldotR = h * 0.004f
+        val lItems = listOf(flowDotPaint to "Flow", pressureDotPaint to "Pressure", weightDotPaint to "Weight")
+        var lx = plotR
+        val ly = titleY
+        lItems.reversed().forEach { (dot, label) ->
+            canvas.drawText(label, lx, ly, legendPaint)
+            lx -= legendPaint.measureText(label) + ldotR * 3f
+            canvas.drawCircle(lx, ly - ldotR * 0.6f, ldotR, dot)
+            lx -= ldotR * 4.5f
         }
     }
 
-    private fun drawTitle(canvas: Canvas, frameTimeMs: Long) {
-        val sec = frameTimeMs / 1000
-        val frac = (frameTimeMs % 1000) / 100
-        titlePaint.textAlign = Paint.Align.LEFT
-        canvas.drawText(log.profileName, plotL, plotT - titlePaint.textSize * 0.4f, titlePaint)
-        dimPaint.textAlign = Paint.Align.RIGHT
-        canvas.drawText("${sec}.${frac}s", plotR, plotT - dimPaint.textSize * 0.3f, dimPaint)
+    private fun drawMetricsCard(canvas: Canvas, samples: List<ShotSample>) {
+        val last = samples.lastOrNull()
+        val cardTop   = plotB + cardPad
+        val cardBot   = cardTop + cardH
+        val rect      = RectF(plotL, cardTop, plotR, cardBot)
+        val radius    = cardH * 0.30f
 
-        // Legend (top-right, reversed so Flow is outermost)
-        val lx = plotR - w * 0.01f
-        val ly = plotT + titlePaint.textSize * 0.6f
-        val lr = h * 0.005f
-        val legendItems = listOf(
-            flowDotPaint     to "Flow (g/s)",
-            pressureDotPaint to "Pressure (bar)",
-            weightDotPaint   to "Weight (g)"
+        canvas.drawRoundRect(rect, radius, radius, cardBgPaint)
+        canvas.drawRoundRect(rect, radius, radius, cardBorderPaint)
+
+        data class Metric(val color: Int, val label: String, val value: String)
+        val metrics = listOf(
+            Metric(EW.flow,     "Flow",     if (last != null) "${"%.2f".format(last.flowGps)} g/s" else "--"),
+            Metric(EW.pressure, "Pressure", if (last?.commandedPressureBar != null) "${"%.1f".format(last.commandedPressureBar)} bar" else "--"),
+            Metric(EW.weight,   "Weight",   if (last != null) "${"%.1f".format(last.weightG)} g" else "--")
         )
-        dimPaint.textAlign = Paint.Align.RIGHT
-        var legendX = lx
-        legendItems.reversed().forEach { (dot, label) ->
-            canvas.drawText(label, legendX, ly, dimPaint)
-            legendX -= dimPaint.measureText(label) + lr * 3
-            canvas.drawCircle(legendX + lr, ly - lr * 0.5f, lr, dot)
-            legendX -= lr * 3.5f
+        val colW = rect.width() / metrics.size
+        val labelY = cardTop + cardH * 0.40f
+        val valueY = cardTop + cardH * 0.80f
+
+        metrics.forEachIndexed { i, m ->
+            val cx = plotL + colW * i + colW / 2f
+
+            // Column divider (skip first)
+            if (i > 0) {
+                canvas.drawLine(plotL + colW * i, cardTop + cardH * 0.14f,
+                    plotL + colW * i, cardTop + cardH * 0.86f, cardDividerPaint)
+            }
+
+            metricLabelPaint.textAlign = Paint.Align.CENTER
+            canvas.drawText(m.label, cx, labelY, metricLabelPaint)
+
+            metricValuePaint.color = m.color
+            metricValuePaint.textAlign = Paint.Align.CENTER
+            canvas.drawText(m.value, cx, valueY, metricValuePaint)
         }
     }
 }

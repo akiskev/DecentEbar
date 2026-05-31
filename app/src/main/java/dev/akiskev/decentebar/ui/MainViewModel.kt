@@ -217,8 +217,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return encoded
     }
 
-    fun exportShotVideo(uri: Uri, format: ShotVideoExporter.Format) {
-        val log = currentShotLog() ?: run {
+    fun exportShotVideo(uri: Uri, format: ShotVideoExporter.Format, log: ShotLog? = null) {
+        val resolvedLog = log ?: currentShotLog() ?: run {
             _uiState.update { it.copy(logMessage = "No shot data to export") }
             return
         }
@@ -228,7 +228,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching {
                     ShotVideoExporter.export(
                         context = getApplication(),
-                        log = log,
+                        log = resolvedLog,
                         outputUri = uri,
                         format = format,
                         onProgress = { p ->
@@ -244,6 +244,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+    }
+
+    fun importShotLogFromUri(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val content = readJsonFromUri(getApplication(), uri)
+            if (content == null) {
+                _uiState.update { it.copy(importShotLogMessage = "Failed to read file") }
+                return@launch
+            }
+            val log = parseShotLog(content)
+            if (log == null) {
+                _uiState.update { it.copy(importShotLogMessage = "Unrecognised shot log file") }
+                return@launch
+            }
+            _uiState.update {
+                it.copy(
+                    importedShotLog = log,
+                    importShotLogMessage = "Loaded: ${log.profileName} (${log.samples.size} samples)"
+                )
+            }
+        }
+    }
+
+    fun clearImportedShotLog() {
+        _uiState.update { it.copy(importedShotLog = null, importShotLogMessage = "") }
+    }
+
+    private fun parseShotLog(content: String): ShotLog? {
+        runCatching { ShotLogCodec.decode(content) }.getOrNull()?.let { return it }
+        val match = Regex(
+            """<script[^>]+id="shotlog-data"[^>]*>([\s\S]*?)</script>""",
+            RegexOption.IGNORE_CASE
+        ).find(content)
+        if (match != null) {
+            val json = match.groupValues[1].trim().replace("<\\/", "</")
+            runCatching { ShotLogCodec.decode(json) }.getOrNull()?.let { return it }
+        }
+        return null
     }
 
     fun setProfileMessage(msg: String) {
