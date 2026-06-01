@@ -156,17 +156,20 @@ ${chartScript()}
     }
 
     private fun chartScript(): String = """
-const PALETTE=['rgba(176,115,85,0.08)','rgba(201,165,90,0.07)','rgba(232,206,133,0.06)','rgba(106,158,136,0.07)','rgba(106,140,158,0.07)','rgba(158,126,106,0.06)'];
+// Alternating band fills (clearly visible) keyed by run order, not stage index.
+const PALETTE=['rgba(252,243,230,0.000)','rgba(252,243,230,0.045)'];
+const TARGET_COLOR='#F2C94C';
 const times=D.map(d=>d[0]/1000);
 const stageIdxs=D.map(d=>d[4]);
 const hasAlt=D.some(d=>d[5]!==null);
 const hasTargets=TARGETS.some(t=>t!==null);
+// Build one band per contiguous run of the same stage. si = stage index (for the target lookup).
 const bands=[];
 let last=-1;
 for(let i=0;i<D.length;i++){
   if(stageIdxs[i]!==last){
-    if(last>=0)bands[bands.length-1].end=times[i];
-    bands.push({name:S[stageIdxs[i]],start:times[i],end:times[times.length-1],ci:bands.length});
+    if(bands.length)bands[bands.length-1].end=times[i];
+    bands.push({name:S[stageIdxs[i]],si:stageIdxs[i],start:times[i],end:times[times.length-1],ci:bands.length});
     last=stageIdxs[i];
   }
 }
@@ -174,18 +177,29 @@ const bandsPlugin={
   id:'bands',
   beforeDraw(chart){
     const{ctx,chartArea:{left,right,top,bottom},scales:{x}}=chart;
+    ctx.save();
     bands.forEach(b=>{
       const x1=Math.max(left,x.getPixelForValue(b.start));
       const x2=Math.min(right,x.getPixelForValue(b.end));
       if(x2<=x1)return;
+      // Fill alternate runs so adjacent stages are distinguishable.
       ctx.fillStyle=PALETTE[b.ci%PALETTE.length];
       ctx.fillRect(x1,top,x2-x1,bottom-top);
+      // Separator line at the start of each band (except the first).
+      if(b.ci>0){
+        ctx.strokeStyle='rgba(252,243,230,0.18)';ctx.lineWidth=1;ctx.setLineDash([2,3]);
+        ctx.beginPath();ctx.moveTo(x1,top);ctx.lineTo(x1,bottom);ctx.stroke();ctx.setLineDash([]);
+      }
+      // Stage name label near the top of each band.
+      ctx.fillStyle='rgba(252,243,230,0.45)';ctx.font='10px -apple-system,sans-serif';ctx.textBaseline='top';
+      ctx.fillText(b.name,x1+4,top+3);
     });
+    ctx.restore();
   }
 };
 const dropPlugin={
   id:'drop',
-  beforeDraw(chart){
+  afterDatasetsDraw(chart){
     const drop=E.find(e=>e[1]==='FIRST_DROP');
     if(!drop)return;
     const{ctx,chartArea:{top,bottom},scales:{x}}=chart;
@@ -194,17 +208,38 @@ const dropPlugin={
     ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();ctx.restore();
   }
 };
+// Draw target-flow lines directly on the canvas (one horizontal dashed segment per
+// flow-limited stage run). Done as a plugin rather than a dataset because a dataset whose
+// data array mixes nulls with points does not render reliably across stage gaps.
+const targetPlugin={
+  id:'target',
+  afterDatasetsDraw(chart){
+    if(!hasTargets)return;
+    const{ctx,chartArea:{left,right},scales:{x,yL}}=chart;
+    ctx.save();ctx.strokeStyle=TARGET_COLOR;ctx.lineWidth=2;ctx.setLineDash([8,6]);
+    bands.forEach(b=>{
+      const tv=TARGETS[b.si];
+      if(tv==null)return;
+      const x1=Math.max(left,x.getPixelForValue(b.start));
+      const x2=Math.min(right,x.getPixelForValue(b.end));
+      if(x2<=x1)return;
+      const py=yL.getPixelForValue(tv);
+      ctx.beginPath();ctx.moveTo(x1,py);ctx.lineTo(x2,py);ctx.stroke();
+    });
+    ctx.restore();
+  }
+};
 const xyFlow=times.map((t,i)=>({x:t,y:D[i][1]}));
 const xyPressure=times.map((t,i)=>({x:t,y:D[i][2]}));
 const xyWeight=times.map((t,i)=>({x:t,y:D[i][3]}));
 const xyAlt=hasAlt?times.map((t,i)=>({x:t,y:D[i][5]})):null;
-const xyTarget=hasTargets?times.map((t,i)=>{const v=TARGETS[stageIdxs[i]];return v!=null?{x:t,y:v}:null;}):null;
 const datasets=[
   {label:hasAlt?'Scale Flow (g/s)':'Flow (g/s)',data:xyFlow,borderColor:'#C9A55A',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',tension:0.2},
   ...(hasAlt?[{label:'Calc Flow (g/s)',data:xyAlt,borderColor:'#9b6fda',backgroundColor:'transparent',borderWidth:1,borderDash:[4,3],pointRadius:0,yAxisID:'yL',tension:0.2,spanGaps:true}]:[]),
   {label:'Pressure (bar)',data:xyPressure,borderColor:'#B07355',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',spanGaps:true},
   {label:'Weight (g)',data:xyWeight,borderColor:'#6A9E88',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yR'},
-  ...(hasTargets?[{label:'Target Flow (g/s)',data:xyTarget,borderColor:'rgba(232,206,133,0.70)',backgroundColor:'transparent',borderWidth:1,borderDash:[8,8],pointRadius:0,yAxisID:'yL',spanGaps:false,tension:0}]:[])
+  // Legend-only entry for the target lines (the lines themselves are drawn by targetPlugin).
+  ...(hasTargets?[{label:'Target Flow (g/s)',data:[],borderColor:TARGET_COLOR,backgroundColor:'transparent',borderWidth:2,borderDash:[8,6],pointRadius:0,yAxisID:'yL'}]:[])
 ];
 const chart=new Chart(document.getElementById('c'),{
   type:'line',
@@ -222,7 +257,7 @@ const chart=new Chart(document.getElementById('c'),{
       yR:{position:'right',title:{display:true,text:'Weight (g)',color:'rgba(252,243,230,0.42)'},ticks:{color:'rgba(252,243,230,0.55)'},grid:{drawOnChartArea:false}}
     }
   },
-  plugins:[bandsPlugin,dropPlugin]
+  plugins:[bandsPlugin,dropPlugin,targetPlugin]
 });
 let _rt;window.addEventListener('resize',()=>{clearTimeout(_rt);_rt=setTimeout(()=>chart.resize(),60);});"""
 
