@@ -2,36 +2,23 @@ package dev.akiskev.decentebar.ui
 
 import android.app.Application
 import android.net.Uri
-import android.os.Build
-import android.view.WindowManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.akiskev.decentebar.accessibility.EbarAccessibilityService
 import dev.akiskev.decentebar.ble.BookooScaleManager
-import dev.akiskev.decentebar.ble.ScaleConnectionState
-import dev.akiskev.decentebar.ble.ScaleReading
 import dev.akiskev.decentebar.engine.FlowEstimator
 import dev.akiskev.decentebar.engine.PressureLutManager
 import dev.akiskev.decentebar.model.BuiltInPressureLut
-import dev.akiskev.decentebar.model.ControllerState
 import dev.akiskev.decentebar.model.DefaultProfiles
-import dev.akiskev.decentebar.model.EbarSnapshot
-import dev.akiskev.decentebar.model.ExitMode
-import dev.akiskev.decentebar.model.LutValidationResult
-import dev.akiskev.decentebar.model.PressureLut
 import dev.akiskev.decentebar.model.ProfileValidator
 import dev.akiskev.decentebar.model.SafetyConfig
-import dev.akiskev.decentebar.model.ScreenSpec
-import dev.akiskev.decentebar.model.ShotEvent
-import dev.akiskev.decentebar.model.ShotEventType
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
-import dev.akiskev.decentebar.model.ShotSample
-import dev.akiskev.decentebar.model.StageType
 import dev.akiskev.decentebar.storage.JsonCodec
 import dev.akiskev.decentebar.storage.ProfileRepository
 import dev.akiskev.decentebar.storage.ShotLogCodec
 import dev.akiskev.decentebar.storage.ShotVideoExporter
+import dev.akiskev.decentebar.util.screenSizePx
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,11 +28,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
-import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
 
+/**
+ * Owns the screen state and wiring. The shot state machine lives in [ShotController]; this class
+ * forwards accessibility snapshots and scale readings to it, and handles everything around the
+ * shot itself: profile CRUD, LUT export, and shot-log import/export (JSON, HTML, MP4).
+ */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val safetyConfig = SafetyConfig()
     private val profileRepository = ProfileRepository(application)
@@ -56,30 +44,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
-    private var shotStartMs: Long? = null
-    private var shotStoppedMs: Long? = null
-    private var stageStartMs: Long? = null
-    private var stageEntryPressureBar: Double? = null
-    private var lastValidWeightMs: Long? = null
-    private var stopSent = false
-    private var manualSkipRequested = false
-    private var firstDropConsecutiveReadings = 0
-    private var firstDropDetected = false
-    private var flowCapWarningLoggedForCurrentStage = false
-    private var lastFlowCorrectionMs: Long? = null
-    private var lastCorrectionFlowGps: Double? = null
+    private val controller = ShotController(
+        state = _uiState,
+        safetyConfig = safetyConfig,
+        lutManager = lutManager,
+        flowEstimator = flowEstimator,
+        startScaleTimer = scaleManager::startTimer
+    )
 
     init {
         val profiles = profileRepository.loadProfiles()
         val selected = profiles.firstOrNull() ?: DefaultProfiles.flow34
-        val (initW, initH) = resolveScreenSize()
+        val (initW, initH) = screenSizePx(application)
         val lut = BuiltInPressureLut.buildFor(initW, initH)
         _uiState.update {
             it.copy(
                 profiles = profiles,
                 selectedProfile = selected,
                 loadedLut = lut,
-                lutValidation = validateLut(it.snapshot, lut, requireForegroundPackage = false),
+                lutValidation = controller.validateLut(it.snapshot, lut, requireForegroundPackage = false),
                 exportedLutJson = ""
             )
         }
@@ -90,8 +73,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // Both source flows are collected on viewModelScope (Dispatchers.Main.immediate). This main-
+        // thread confinement is what makes ShotController's unsynchronized runtime state safe.
         viewModelScope.launch {
-            EbarAccessibilityService.snapshots.collect(::handleSnapshot)
+            EbarAccessibilityService.snapshots.collect(controller::onSnapshot)
         }
 
         viewModelScope.launch {
@@ -101,7 +86,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            scaleManager.latestReading.filterNotNull().collect(::handleScaleReading)
+            scaleManager.latestReading.filterNotNull().collect(controller::onScaleReading)
         }
     }
 
@@ -110,76 +95,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scaleManager.close()
     }
 
-    fun arm() {
-        val service = EbarAccessibilityService.current()
-        if (service == null) {
-            fail("Accessibility service is not enabled", attemptStop = false)
-            return
-        }
+    // --- Shot controls (delegated) ---
 
-        val freshSnapshot = service.captureSnapshot()
-        val state = _uiState.value
-        val validation = validateLut(freshSnapshot, state.loadedLut, requireForegroundPackage = false)
-        val profileErrors = ProfileValidator.validate(state.selectedProfile)
+    fun arm() = controller.arm()
 
-        when {
-            !validation.isValid -> fail("Cannot arm: ${validation.displayText}", attemptStop = false)
-            profileErrors.isNotEmpty() -> fail("Cannot arm: ${profileErrors.joinToString("; ")}", attemptStop = false)
-            else -> {
-                resetShotRuntime()
-                stageStartMs = now()
-                EbarAccessibilityService.setShouldRun(true)
-                _uiState.update {
-                    it.copy(
-                        snapshot = freshSnapshot,
-                        lutValidation = validation,
-                        controllerState = ControllerState.ARMED,
-                        currentStageIndex = 0,
-                        currentFlowGps = 0.0,
-                        currentWeightG = freshSnapshot.weightG,
-                        commandedPressureBar = null,
-                        elapsedShotTimeMs = 0L,
-                        safetyStatus = "Armed; waiting for E-Bar shot screen",
-                        lastSafetyError = "--",
-                        samples = emptyList(),
-                        events = emptyList(),
-                        exportedLogJson = ""
-                    )
-                }
-                recordEvent(ShotEventType.ARM, "Controller armed")
-                recordState(ControllerState.ARMED, "Controller armed")
-            }
-        }
-    }
+    fun disarm() = controller.disarm()
 
-    fun disarm() {
-        resetShotRuntime()
-        EbarAccessibilityService.setShouldRun(false)
-        _uiState.update {
-            it.copy(
-                controllerState = ControllerState.IDLE,
-                currentStageIndex = -1,
-                safetyStatus = "Disarmed",
-                elapsedShotTimeMs = 0L
-            )
-        }
-        recordEvent(ShotEventType.DISARM, "Controller disarmed")
-    }
+    fun emergencyStop() = controller.emergencyStop()
 
-    fun emergencyStop() {
-        val nowMs = now()
-        EbarAccessibilityService.setShouldRun(true)
-        sendStop("Emergency stop", nowMs, _uiState.value.currentWeightG, explicitRetry = true)
-    }
+    fun manualSkipStage() = controller.manualSkipStage()
+
+    // --- Scale ---
 
     fun connectToScale() = scaleManager.startScan()
 
     fun disconnectScale() = scaleManager.disconnect()
 
-    fun manualSkipStage() {
-        manualSkipRequested = true
-        recordEvent(ShotEventType.INFO, "Manual stage skip requested")
-    }
+    // --- Shot log ---
 
     fun resetShotLog() {
         _uiState.update {
@@ -199,8 +131,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .toMap()
         return ShotLog(
             profileName = state.selectedProfile.name,
-            startedAtMs = shotStartMs,
-            stoppedAtMs = shotStoppedMs,
+            startedAtMs = controller.shotStartMs,
+            stoppedAtMs = controller.shotStoppedMs,
             samples = state.samples,
             events = state.events,
             stageTargetFlows = targetFlows
@@ -283,6 +215,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         return null
     }
+
+    // --- Profiles ---
 
     fun setProfileMessage(msg: String) {
         _uiState.update { it.copy(profileMessage = msg) }
@@ -372,6 +306,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
     }
 
+    // --- LUT ---
+
     fun exportLut() {
         val lut = _uiState.value.loadedLut
         _uiState.update {
@@ -389,667 +325,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         EbarAccessibilityService.current()?.captureSnapshot()?.let { fresh ->
-            val validation = validateLut(fresh, _uiState.value.loadedLut, requireForegroundPackage = false)
+            val validation = controller.validateLut(fresh, _uiState.value.loadedLut, requireForegroundPackage = false)
             _uiState.update { it.copy(snapshot = fresh, lutValidation = validation) }
         }
-        commandPressure(pressure, now(), force = true, source = "Manual LUT test")
-    }
-
-    private fun handleSnapshot(snapshot: EbarSnapshot) {
-        val nowMs = snapshot.timestampMs.takeIf { it > 0L } ?: now()
-        val state = _uiState.value
-        val nextLut = lutForScreen(snapshot.screenWidth, snapshot.screenHeight, state.loadedLut)
-        val validation = validateLut(snapshot, nextLut, requireForegroundPackage = false)
-        val nextWeight = snapshot.weightG ?: state.currentWeightG
-        val serviceEnabled = EbarAccessibilityService.current() != null
-
-        val needsUpdate = !snapshotsMaterialEqual(state.snapshot, snapshot) ||
-            state.lutValidation != validation ||
-            state.currentWeightG != nextWeight ||
-            state.serviceEnabled != serviceEnabled ||
-            state.loadedLut !== nextLut
-
-        if (needsUpdate) {
-            _uiState.update {
-                it.copy(
-                    snapshot = snapshot,
-                    serviceEnabled = serviceEnabled,
-                    loadedLut = nextLut,
-                    lutValidation = validation,
-                    currentWeightG = nextWeight
-                )
-            }
-        }
-
-        when (state.controllerState) {
-            ControllerState.IDLE,
-            ControllerState.STOPPED,
-            ControllerState.ERROR -> Unit
-            ControllerState.ARMED -> handleArmedSnapshot(snapshot, nowMs)
-            ControllerState.RUNNING,
-            ControllerState.STAGE_TRANSITION -> handleRunningSnapshot(snapshot, nowMs)
-            ControllerState.STOPPING -> handleStoppingSnapshot(snapshot, nowMs)
-        }
-    }
-
-    private fun snapshotsMaterialEqual(a: EbarSnapshot, b: EbarSnapshot): Boolean {
-        return a.isForeground == b.isForeground &&
-            a.activePackage == b.activePackage &&
-            a.hasStart == b.hasStart &&
-            a.hasStop == b.hasStop &&
-            a.hasWeigh == b.hasWeigh &&
-            a.hasPressurePriority == b.hasPressurePriority &&
-            a.hasFlowRatePriority == b.hasFlowRatePriority &&
-            a.hasPressureLabel == b.hasPressureLabel &&
-            a.weightG == b.weightG &&
-            a.screenWidth == b.screenWidth &&
-            a.screenHeight == b.screenHeight &&
-            a.orientation == b.orientation &&
-            a.rawDescriptions == b.rawDescriptions &&
-            a.rawTexts == b.rawTexts
-    }
-
-    private fun handleArmedSnapshot(snapshot: EbarSnapshot, nowMs: Long) {
-        if (!snapshot.isForeground) {
-            _uiState.update { it.copy(safetyStatus = "Armed; waiting for E-Bar foreground") }
-            return
-        }
-
-        if (snapshot.hasStop) {
-            beginRunning(nowMs, snapshot)
-            return
-        }
-
-        if (!snapshot.hasStart) {
-            fail("Neither Start nor Stop is visible while armed", attemptStop = false)
-        } else {
-            _uiState.update { it.copy(safetyStatus = "Armed; waiting for shot start") }
-        }
-    }
-
-    private fun beginRunning(nowMs: Long, snapshot: EbarSnapshot) {
-        shotStartMs = nowMs
-        stageStartMs = nowMs
-        lastValidWeightMs = snapshot.weightG?.let { nowMs }
-        flowEstimator.reset()
-        lutManager.resetThrottle()
-        firstDropConsecutiveReadings = 0
-        firstDropDetected = false
-        stopSent = false
-        if (_uiState.value.scaleConnectionState == ScaleConnectionState.CONNECTED) {
-            scaleManager.startTimer()
-        }
-        recordState(ControllerState.RUNNING, "Shot running")
-        _uiState.update {
-            it.copy(
-                controllerState = ControllerState.RUNNING,
-                currentStageIndex = 0,
-                elapsedShotTimeMs = 0L,
-                safetyStatus = "Running",
-                currentWeightG = snapshot.weightG
-            )
-        }
-    }
-
-    private fun handleRunningSnapshot(snapshot: EbarSnapshot, nowMs: Long) {
-        if (!snapshot.isForeground) {
-            fail("E-Bar moved out of foreground during shot", attemptStop = false)
-            return
-        }
-
-        if (!snapshot.hasStop && shotStartMs != null) {
-            finishStopped(nowMs, "Stop disappeared from E-Bar")
-            return
-        }
-
-        val shotStart = shotStartMs ?: nowMs.also { shotStartMs = it }
-        val elapsedMs = nowMs - shotStart
-
-        // When scale is connected it drives weight/flow and calls runCurrentStage directly.
-        // Snapshots still handle safety (foreground, stop-button disappearance) and the
-        // missing-data watchdog.
-        if (_uiState.value.scaleConnectionState == ScaleConnectionState.CONNECTED) {
-            val missingSince = lastValidWeightMs ?: shotStart
-            if (nowMs - missingSince > safetyConfig.missingWeightTimeoutMs) {
-                fail("Scale: no weight data for ${safetyConfig.missingWeightTimeoutMs}ms", attemptStop = true)
-            }
-            _uiState.update { it.copy(elapsedShotTimeMs = elapsedMs, safetyStatus = "Running") }
-            return
-        }
-
-        val profile = _uiState.value.selectedProfile
-        val weight = snapshot.weightG
-
-        if (weight == null) {
-            val missingSince = lastValidWeightMs ?: shotStart
-            if (nowMs - missingSince > safetyConfig.missingWeightTimeoutMs) {
-                fail("Missing live weight for more than ${safetyConfig.missingWeightTimeoutMs}ms", attemptStop = true)
-            }
-            return
-        }
-
-        lastValidWeightMs = nowMs
-        val flow = flowEstimator.addSample(nowMs, weight)
-        updateFirstDrop(weight)
-
-        _uiState.update {
-            it.copy(
-                currentWeightG = weight,
-                currentFlowGps = flow,
-                elapsedShotTimeMs = elapsedMs,
-                safetyStatus = "Running"
-            )
-        }
-
-        appendSample(nowMs, weight, flow)
-
-        if (elapsedMs >= profile.maxShotTimeMs) {
-            sendStop("Max shot time reached", nowMs, weight)
-            return
-        }
-
-        if (weight >= profile.targetWeightG - profile.stopOffsetG) {
-            sendStop("Target stop threshold reached", nowMs, weight)
-            return
-        }
-
-        runCurrentStage(nowMs, weight, flow)
-    }
-
-    private fun handleScaleReading(reading: ScaleReading) {
-        val nowMs = reading.timestampMs
-        val state = _uiState.value
-        val weight = reading.weightG
-        val scaleFlow = reading.flowGps
-        // Run our software estimator in parallel — result logged as altFlowGps for comparison
-        val calcFlow = flowEstimator.addSample(nowMs, weight)
-
-        when (state.controllerState) {
-            ControllerState.RUNNING, ControllerState.STAGE_TRANSITION -> {
-                val shotStart = shotStartMs ?: return
-                val elapsedMs = nowMs - shotStart
-
-                lastValidWeightMs = nowMs
-                updateFirstDrop(weight)
-
-                _uiState.update {
-                    it.copy(
-                        currentWeightG = weight,
-                        currentFlowGps = scaleFlow,
-                        currentCalcFlowGps = calcFlow,
-                        elapsedShotTimeMs = elapsedMs,
-                        scaleBatteryPercent = reading.batteryPercent,
-                        safetyStatus = "Running"
-                    )
-                }
-
-                appendSample(nowMs, weight, scaleFlow, altFlowGps = calcFlow)
-
-                val profile = state.selectedProfile
-                if (elapsedMs >= profile.maxShotTimeMs) {
-                    sendStop("Max shot time reached", nowMs, weight)
-                    return
-                }
-                if (weight >= profile.targetWeightG - profile.stopOffsetG) {
-                    sendStop("Target stop threshold reached", nowMs, weight)
-                    return
-                }
-
-                runCurrentStage(nowMs, weight, scaleFlow)
-            }
-            else -> {
-                _uiState.update {
-                    it.copy(
-                        currentWeightG = weight,
-                        currentFlowGps = scaleFlow,
-                        currentCalcFlowGps = calcFlow,
-                        scaleBatteryPercent = reading.batteryPercent
-                    )
-                }
-            }
-        }
-    }
-
-    private fun handleStoppingSnapshot(snapshot: EbarSnapshot, nowMs: Long) {
-        val shotStart = shotStartMs
-        _uiState.update {
-            it.copy(
-                snapshot = snapshot,
-                elapsedShotTimeMs = if (shotStart == null) it.elapsedShotTimeMs else nowMs - shotStart
-            )
-        }
-
-        if (snapshot.isForeground && !snapshot.hasStop) {
-            finishStopped(nowMs, "Shot stopped")
-        }
-    }
-
-    private fun runCurrentStage(nowMs: Long, weight: Double, flow: Double) {
-        val state = _uiState.value
-        val profile = state.selectedProfile
-        val stage = profile.stages.getOrNull(state.currentStageIndex) ?: run {
-            sendStop("Profile stages exhausted", nowMs, weight)
-            return
-        }
-
-        val stageElapsedMs = nowMs - (stageStartMs ?: nowMs)
-        val safetyTimeout = stage.safety.maxStageTimeMs?.let { stageElapsedMs >= it } ?: false
-        if (safetyTimeout) manualSkipRequested = true
-
-        when (stage.type) {
-            StageType.FIXED_PRESSURE -> stage.fixedPressureBar?.let {
-                commandPressure(it, nowMs, source = stage.name)
-            }
-            StageType.TIME_BASED_PRESSURE_RAMP -> {
-                val start = stage.rampStartPressureBar ?: state.commandedPressureBar ?: safetyConfig.minPressureBar
-                val end = stage.rampEndPressureBar ?: start
-                val duration = max(1L, stage.rampDurationMs ?: 1L)
-                val progress = (stageElapsedMs.toDouble() / duration).coerceIn(0.0, 1.0)
-                commandPressure(lerp(start, end, progress), nowMs, source = stage.name)
-            }
-            StageType.FLOW_LIMITED_PRESSURE -> runFlowLimitedStage(nowMs, flow, stage.name)
-            StageType.WEIGHT_BASED_PRESSURE_RAMP -> {
-                val startWeight = stage.rampStartWeightG ?: weight
-                val endWeight = stage.rampEndWeightG ?: startWeight
-                val startPressure = stage.rampStartPressureBar
-                    ?: stageEntryPressureBar
-                    ?: state.commandedPressureBar
-                    ?: safetyConfig.maxPressureBar
-                val endPressure = stage.rampEndPressureBar ?: startPressure
-                val progress = if (endWeight == startWeight) 1.0 else {
-                    ((weight - startWeight) / (endWeight - startWeight)).coerceIn(0.0, 1.0)
-                }
-                commandPressure(lerp(startPressure, endPressure, progress), nowMs, source = stage.name)
-            }
-            StageType.STOP -> {
-                sendStop("Stop stage reached", nowMs, weight)
-                return
-            }
-        }
-
-        val reason = exitReason(nowMs, weight, flow, safetyTimeout)
-        if (reason != null) {
-            advanceStage(nowMs, weight, reason)
-        }
-    }
-
-    private fun runFlowLimitedStage(nowMs: Long, flow: Double, stageName: String) {
-        val state = _uiState.value
-        val stage = state.selectedProfile.stages.getOrNull(state.currentStageIndex) ?: return
-        val target = stage.targetFlowGps ?: return
-        val cap = min(stage.pressureCapBar ?: safetyConfig.maxPressureBar, safetyConfig.maxPressureBar)
-        val currentPressure = state.commandedPressureBar ?: min(cap, stageEntryPressureBar ?: cap)
-
-        // Auto-tune: with BLE scale the control loop runs much faster, so use a shorter
-        // correction interval and a proportionally smaller step to keep the max rate of
-        // pressure change constant (bar/s) regardless of interval.
-        val scaleOn = state.scaleConnectionState == ScaleConnectionState.CONNECTED
-        val autoIntervalMs = if (scaleOn) 250L else 600L
-        val intervalMs = stage.correctionIntervalMs ?: autoIntervalMs
-        val autoStep = 0.6 * (autoIntervalMs.toDouble() / 600.0)  // 0.25 with BLE, 0.6 without
-        val step = stage.pressureStepBar ?: autoStep
-        val deadband = stage.flowDeadbandGps ?: 0.1
-        val maxMult = stage.pressureStepMultiplierMax ?: 8.0
-
-        val lastCorrection = lastFlowCorrectionMs
-        val dueForCorrection = lastCorrection == null || (nowMs - lastCorrection) >= intervalMs
-
-        if (dueForCorrection) {
-            val error = flow - target
-            val absError = abs(error)
-
-            // Derivative guard: if the previous correction is already moving flow toward the
-            // target, reduce the multiplier to 30% to avoid stacking corrections faster than
-            // the system can respond (dead-time over-correction).
-            val lastFlow = lastCorrectionFlowGps
-            val movingTowardTarget = when {
-                error > deadband -> lastFlow != null && flow < lastFlow
-                error < -deadband -> lastFlow != null && flow > lastFlow
-                else -> false
-            }
-            val rawMultiplier = if (absError > deadband) (absError / deadband).coerceAtMost(maxMult) else 0.0
-            val multiplier = if (movingTowardTarget) rawMultiplier * 0.3 else rawMultiplier
-            val scaledStep = step * multiplier
-
-            val nextPressure = when {
-                flow > target + deadband -> currentPressure - scaledStep
-                flow < target - deadband -> currentPressure + scaledStep
-                else -> currentPressure
-            }.coerceIn(safetyConfig.minPressureBar, cap)
-
-            if (nextPressure != currentPressure || state.commandedPressureBar == null) {
-                // Only advance the correction timer when the LUT actually accepts the command.
-                // If it throttles (too soon after last tap), leave lastFlowCorrectionMs unchanged
-                // so we retry on the next check instead of wasting the correction budget.
-                val accepted = commandPressure(nextPressure, nowMs, source = stageName)
-                if (accepted) {
-                    lastFlowCorrectionMs = nowMs
-                    lastCorrectionFlowGps = flow
-                }
-            } else {
-                // In deadband — no pressure change needed, but still advance the timer so we
-                // don't check again on every single BLE notification.
-                lastFlowCorrectionMs = nowMs
-                lastCorrectionFlowGps = flow
-            }
-
-            if (!flowCapWarningLoggedForCurrentStage && nextPressure >= cap && flow < target - deadband) {
-                flowCapWarningLoggedForCurrentStage = true
-                recordEvent(
-                    ShotEventType.INFO,
-                    "$stageName: flow ${flow.format(2)} g/s below target ${target.format(2)} g/s — pressure capped at ${cap.format(2)} bar"
-                )
-            }
-        }
-    }
-
-    private fun exitReason(nowMs: Long, weight: Double, flow: Double, safetyTimeout: Boolean): String? {
-        val state = _uiState.value
-        val stage = state.selectedProfile.stages.getOrNull(state.currentStageIndex) ?: return "no stage"
-        val stageElapsedMs = nowMs - (stageStartMs ?: nowMs)
-        val exit = stage.exit
-
-        data class Cond(val triggered: Boolean, val reason: String)
-
-        val conditions = buildList<Cond> {
-            exit.weightGte?.let { add(Cond(weight >= it, "weight ${weight.format(1)}g ≥ ${it.format(1)}g")) }
-            exit.stageTimeGteMs?.let { ms -> add(Cond(stageElapsedMs >= ms, "time limit ${ms}ms reached")) }
-            exit.flowGte?.let { add(Cond(flow >= it, "flow ${flow.format(2)} g/s ≥ ${it.format(2)} g/s")) }
-            exit.flowLte?.let { add(Cond(flow <= it, "flow ${flow.format(2)} g/s ≤ ${it.format(2)} g/s")) }
-            if (exit.firstDropDetected) add(Cond(firstDropDetected, "first drop detected"))
-            if (exit.manualSkip || manualSkipRequested) add(Cond(manualSkipRequested, "manual skip"))
-            if (exit.safetyTimeout || safetyTimeout) add(Cond(safetyTimeout || manualSkipRequested, "safety timeout"))
-        }
-
-        if (conditions.isEmpty()) return null
-        return when (exit.mode) {
-            ExitMode.ANY -> conditions.firstOrNull { it.triggered }?.reason
-            ExitMode.ALL -> if (conditions.all { it.triggered }) conditions.joinToString(", ") { it.reason } else null
-        }
-    }
-
-    private fun advanceStage(nowMs: Long, weight: Double, exitReason: String) {
-        val state = _uiState.value
-        val profile = state.selectedProfile
-        val previousStage = profile.stages.getOrNull(state.currentStageIndex)
-        val nextIndex = state.currentStageIndex + 1
-
-        flowCapWarningLoggedForCurrentStage = false
-        lastFlowCorrectionMs = null
-        lastCorrectionFlowGps = null
-        recordEvent(
-            ShotEventType.STAGE_EXIT,
-            "Exit ${previousStage?.name ?: "stage"} — $exitReason at ${weight.format(1)}g",
-            weightG = weight
-        )
-
-        manualSkipRequested = false
-        stageStartMs = nowMs
-        stageEntryPressureBar = state.commandedPressureBar
-
-        if (nextIndex >= profile.stages.size) {
-            sendStop("Profile complete", nowMs, weight)
-            return
-        }
-
-        _uiState.update {
-            it.copy(
-                controllerState = ControllerState.STAGE_TRANSITION,
-                currentStageIndex = nextIndex,
-                safetyStatus = "Entering ${profile.stages[nextIndex].name}"
-            )
-        }
-        recordState(ControllerState.STAGE_TRANSITION, "Entering ${profile.stages[nextIndex].name}")
-        _uiState.update { it.copy(controllerState = ControllerState.RUNNING) }
-
-        if (profile.stages[nextIndex].type == StageType.STOP) {
-            sendStop("Stop stage reached", nowMs, weight)
-        }
-    }
-
-    private fun commandPressure(
-        requestedPressureBar: Double,
-        nowMs: Long,
-        force: Boolean = false,
-        source: String
-    ): Boolean {
-        val state = _uiState.value
-        val service = EbarAccessibilityService.current()
-        if (service == null) {
-            fail("Accessibility service unavailable before pressure command", attemptStop = false)
-            return false
-        }
-
-        val result = lutManager.requestPressure(
-            lut = state.loadedLut,
-            screen = screenSpec(state.snapshot),
-            requestedPressureBar = requestedPressureBar,
-            nowMs = nowMs,
-            force = force
-        )
-
-        if (!result.accepted) {
-            _uiState.update { it.copy(lastPressureCommand = result.message) }
-            return false
-        }
-
-        val point = result.point ?: return false
-        val tapped = service.dispatchTap(point.x, point.y)
-        if (!tapped) {
-            fail("Failed to dispatch pressure tap", attemptStop = false)
-            return false
-        }
-
-        val pressure = result.pressureBar ?: requestedPressureBar
-        _uiState.update {
-            it.copy(
-                commandedPressureBar = pressure,
-                lastPressureCommand = "$source: ${pressure.format(2)} bar -> ${point.x.toInt()},${point.y.toInt()}"
-            )
-        }
-        recordEvent(
-            ShotEventType.PRESSURE_COMMAND,
-            "$source commanded ${pressure.format(2)} bar",
-            pressureBar = pressure
-        )
-        return true
-    }
-
-    private fun sendStop(
-        reason: String,
-        nowMs: Long,
-        weight: Double?,
-        explicitRetry: Boolean = false
-    ) {
-        if (stopSent && !explicitRetry) return
-
-        val service = EbarAccessibilityService.current()
-        if (service == null) {
-            fail("Accessibility service unavailable before Stop command", attemptStop = false)
-            return
-        }
-
-        stopSent = true
-        val sent = service.clickStopOrFallback(safetyConfig)
-        val message = if (sent) reason else "$reason; Stop dispatch failed"
-        _uiState.update {
-            it.copy(
-                controllerState = if (sent) ControllerState.STOPPING else ControllerState.ERROR,
-                safetyStatus = if (sent) "Stopping" else message,
-                lastStopCommand = "${nowMs}: $message"
-            )
-        }
-        recordEvent(ShotEventType.STOP_COMMAND, message, weightG = weight)
-        recordState(if (sent) ControllerState.STOPPING else ControllerState.ERROR, message)
-        if (!sent) resetRuntimeAfterTerminalState()
-    }
-
-    private fun finishStopped(nowMs: Long, reason: String) {
-        shotStoppedMs = nowMs
-        EbarAccessibilityService.setShouldRun(false)
-        _uiState.update {
-            it.copy(
-                controllerState = ControllerState.STOPPED,
-                safetyStatus = reason,
-                elapsedShotTimeMs = shotStartMs?.let { started -> nowMs - started } ?: it.elapsedShotTimeMs
-            )
-        }
-        recordState(ControllerState.STOPPED, reason)
-        resetRuntimeAfterTerminalState()
-    }
-
-    private fun fail(message: String, attemptStop: Boolean) {
-        val nowMs = now()
-        val weight = _uiState.value.currentWeightG
-        if (attemptStop && !stopSent) {
-            EbarAccessibilityService.current()?.clickStopOrFallback(safetyConfig)
-            stopSent = true
-            recordEvent(ShotEventType.STOP_COMMAND, "Safety stop attempted: $message", weightG = weight)
-        }
-
-        EbarAccessibilityService.setShouldRun(false)
-        _uiState.update {
-            it.copy(
-                controllerState = ControllerState.ERROR,
-                safetyStatus = message,
-                lastSafetyError = message
-            )
-        }
-        recordEvent(ShotEventType.SAFETY_ERROR, message, weightG = weight)
-        recordState(ControllerState.ERROR, message)
-        resetRuntimeAfterTerminalState()
-    }
-
-    private fun updateFirstDrop(weight: Double) {
-        if (firstDropDetected) return
-
-        if (weight >= safetyConfig.firstDropThresholdG) {
-            firstDropConsecutiveReadings += 1
-        } else {
-            firstDropConsecutiveReadings = 0
-        }
-
-        val currentStage = _uiState.value.selectedProfile.stages.getOrNull(_uiState.value.currentStageIndex)
-        val requiresTwo = currentStage?.safety?.requireTwoConsecutiveFirstDropReadings == true
-        val detected = if (requiresTwo) firstDropConsecutiveReadings >= 2 else firstDropConsecutiveReadings >= 1
-
-        if (detected) {
-            firstDropDetected = true
-            recordEvent(ShotEventType.FIRST_DROP, "First drop detected at ${weight.format(1)} g", weightG = weight)
-        }
-    }
-
-    private fun appendSample(nowMs: Long, weight: Double, flow: Double, altFlowGps: Double? = null) {
-        val state = _uiState.value
-        val shotStart = shotStartMs ?: nowMs
-        val sample = ShotSample(
-            timeMs = nowMs - shotStart,
-            weightG = weight,
-            flowGps = flow,
-            commandedPressureBar = state.commandedPressureBar,
-            stageName = state.currentStageName,
-            altFlowGps = altFlowGps
-        )
-        _uiState.update { it.copy(samples = (it.samples + sample).takeLast(MAX_LOG_ITEMS)) }
-    }
-
-    private fun recordState(state: ControllerState, message: String) {
-        recordEvent(ShotEventType.STATE_TRANSITION, "${state.name}: $message")
-    }
-
-    private fun recordEvent(
-        type: ShotEventType,
-        message: String,
-        weightG: Double? = null,
-        pressureBar: Double? = null
-    ) {
-        val shotStart = shotStartMs
-        val eventTime = if (shotStart == null) 0L else now() - shotStart
-        val event = ShotEvent(
-            timeMs = eventTime,
-            type = type,
-            message = message,
-            weightG = weightG,
-            pressureBar = pressureBar
-        )
-        _uiState.update { it.copy(events = (it.events + event).takeLast(MAX_LOG_ITEMS)) }
-    }
-
-    private fun resetShotRuntime() {
-        shotStartMs = null
-        shotStoppedMs = null
-        stageStartMs = null
-        stageEntryPressureBar = null
-        lastValidWeightMs = null
-        stopSent = false
-        manualSkipRequested = false
-        firstDropConsecutiveReadings = 0
-        firstDropDetected = false
-        flowCapWarningLoggedForCurrentStage = false
-        lastFlowCorrectionMs = null
-        lastCorrectionFlowGps = null
-        flowEstimator.reset()
-        lutManager.resetThrottle()
-    }
-
-    private fun resetRuntimeAfterTerminalState() {
-        stageStartMs = null
-        stageEntryPressureBar = null
-        lastValidWeightMs = null
-        manualSkipRequested = false
-        flowEstimator.reset()
-        lutManager.resetThrottle()
-    }
-
-    private fun validateLut(
-        snapshot: EbarSnapshot,
-        lut: PressureLut?,
-        requireForegroundPackage: Boolean
-    ): LutValidationResult {
-        return lutManager.validate(lut, screenSpec(snapshot), requireForegroundPackage)
-    }
-
-    private fun screenSpec(snapshot: EbarSnapshot): ScreenSpec {
-        return ScreenSpec(
-            width = snapshot.screenWidth,
-            height = snapshot.screenHeight,
-            orientation = snapshot.orientation,
-            packageName = snapshot.activePackage
-        )
-    }
-
-    private fun lutForScreen(width: Int, height: Int, current: PressureLut?): PressureLut? {
-        if (width <= 0 || height <= 0) return current
-        val longSide = maxOf(width, height)
-        val shortSide = minOf(width, height)
-        if (current != null && current.screenWidth == longSide && current.screenHeight == shortSide) return current
-        return BuiltInPressureLut.buildFor(width, height) ?: current
-    }
-
-    private fun resolveScreenSize(): Pair<Int, Int> {
-        val app = getApplication<Application>()
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val wm = app.getSystemService(WindowManager::class.java)
-            val bounds = wm?.maximumWindowMetrics?.bounds
-            if (bounds != null) bounds.width() to bounds.height() else 0 to 0
-        } else {
-            @Suppress("DEPRECATION")
-            val m = app.resources.displayMetrics
-            m.widthPixels to m.heightPixels
-        }
-    }
-
-    private fun lerp(start: Double, end: Double, progress: Double): Double {
-        return start + (end - start) * progress
-    }
-
-    private fun now(): Long = System.currentTimeMillis()
-
-    private fun Double.format(decimals: Int): String {
-        return String.format(Locale.US, "%.${decimals}f", this)
-    }
-
-    companion object {
-        private const val MAX_LOG_ITEMS = 2_000
+        controller.commandPressure(pressure, System.currentTimeMillis(), force = true, source = "Manual LUT test")
     }
 }

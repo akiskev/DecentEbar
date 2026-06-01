@@ -42,12 +42,8 @@ object ShotVideoExporter {
         }
 
         val codec = MediaCodec.createEncoderByType(mime)
-        codec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        codec.start()
-
-        val pfd = context.contentResolver.openFileDescriptor(outputUri, "rw")
-            ?: error("Cannot open output URI")
-        val muxer = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        var pfd: android.os.ParcelFileDescriptor? = null
+        var muxer: MediaMuxer? = null
         var trackIndex = -1
         var muxerStarted = false
 
@@ -58,6 +54,16 @@ object ShotVideoExporter {
         val yuv = ByteArray(format.width * format.height * 3 / 2)
 
         try {
+            // Set up the encoder, output file and muxer inside the try so that if any of these
+            // throw, the finally block still releases whatever was already created.
+            codec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            codec.start()
+
+            pfd = context.contentResolver.openFileDescriptor(outputUri, "rw")
+                ?: error("Cannot open output URI")
+            val activeMuxer = MediaMuxer(pfd.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer = activeMuxer
+
             var frameIndex = 0
             while (frameIndex <= totalFrames) {
                 val isLast = frameIndex == totalFrames
@@ -82,7 +88,7 @@ object ShotVideoExporter {
                 }
 
                 // Drain
-                drainEncoder(codec, muxer, bufferInfo, trackIndex, muxerStarted) { idx, started ->
+                drainEncoder(codec, activeMuxer, bufferInfo, trackIndex, muxerStarted) { idx, started ->
                     trackIndex = idx
                     muxerStarted = started
                 }
@@ -93,20 +99,20 @@ object ShotVideoExporter {
             // Drain remaining output
             var eos = false
             while (!eos) {
-                eos = drainEncoder(codec, muxer, bufferInfo, trackIndex, muxerStarted) { idx, started ->
+                eos = drainEncoder(codec, activeMuxer, bufferInfo, trackIndex, muxerStarted) { idx, started ->
                     trackIndex = idx
                     muxerStarted = started
                 }
             }
         } finally {
-            codec.stop()
+            runCatching { codec.stop() }
             codec.release()
             bitmap.recycle()
-            if (muxerStarted) {
-                muxer.stop()
+            if (muxer != null) {
+                if (muxerStarted) runCatching { muxer.stop() }
+                muxer.release()
             }
-            muxer.release()
-            pfd.close()
+            pfd?.close()
         }
     }
 

@@ -15,9 +15,15 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class ScaleReading(
@@ -44,7 +50,13 @@ class BookooScaleManager(private val context: Context) {
         private val CMD_START_TIMER = byteArrayOf(0x03, 0x0A, 0x04, 0x00, 0x00, 0x0A)
         // Flow smoothing on: checksum = 0x03^0x0A^0x08^0x00^0x01 = 0x00
         private val CMD_FLOW_SMOOTHING_ON = byteArrayOf(0x03, 0x0A, 0x08, 0x00, 0x01, 0x00)
+
+        // Stop scanning and report failure if no Bookoo scale is found in this window.
+        private const val SCAN_TIMEOUT_MS = 15_000L
     }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var scanTimeoutJob: Job? = null
 
     private val _connectionState = MutableStateFlow(ScaleConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ScaleConnectionState> = _connectionState.asStateFlow()
@@ -72,9 +84,20 @@ class BookooScaleManager(private val context: Context) {
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
         scanner?.startScan(listOf(filter), settings, scanCallback)
+
+        // Don't sit in SCANNING forever if no scale is in range.
+        scanTimeoutJob?.cancel()
+        scanTimeoutJob = scope.launch {
+            delay(SCAN_TIMEOUT_MS)
+            if (_connectionState.value == ScaleConnectionState.SCANNING) {
+                scanner?.stopScan(scanCallback)
+                _connectionState.value = ScaleConnectionState.ERROR
+            }
+        }
     }
 
     fun disconnect() {
+        scanTimeoutJob?.cancel()
         scanner?.stopScan(scanCallback)
         gatt?.disconnect()
         // close() is called in onConnectionStateChange after STATE_DISCONNECTED
@@ -84,6 +107,7 @@ class BookooScaleManager(private val context: Context) {
 
     fun close() {
         disconnect()
+        scanTimeoutJob?.cancel()
         gatt?.close()
         gatt = null
     }
@@ -107,12 +131,14 @@ class BookooScaleManager(private val context: Context) {
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            scanTimeoutJob?.cancel()
             scanner?.stopScan(this)
             _connectionState.value = ScaleConnectionState.CONNECTING
             result.device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         }
 
         override fun onScanFailed(errorCode: Int) {
+            scanTimeoutJob?.cancel()
             _connectionState.value = ScaleConnectionState.ERROR
         }
     }

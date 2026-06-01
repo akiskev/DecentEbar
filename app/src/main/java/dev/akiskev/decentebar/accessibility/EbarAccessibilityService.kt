@@ -3,14 +3,13 @@ package dev.akiskev.decentebar.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
-import android.os.Build
-import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.akiskev.decentebar.engine.EbarParser
 import dev.akiskev.decentebar.model.EBAR_PACKAGE_NAME
 import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.SafetyConfig
+import dev.akiskev.decentebar.util.screenSizePx
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -166,16 +165,7 @@ class EbarAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun screenSize(): Pair<Int, Int> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
-            bounds.width() to bounds.height()
-        } else {
-            @Suppress("DEPRECATION")
-            val metrics = resources.displayMetrics
-            metrics.widthPixels to metrics.heightPixels
-        }
-    }
+    private fun screenSize(): Pair<Int, Int> = screenSizePx(this)
 
     private fun now(): Long = System.currentTimeMillis()
 

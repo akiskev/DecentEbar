@@ -7,6 +7,7 @@ import dev.akiskev.decentebar.model.PressureLut
 import dev.akiskev.decentebar.model.PressurePoint
 import dev.akiskev.decentebar.model.SafetyConfig
 import dev.akiskev.decentebar.model.ScreenSpec
+import dev.akiskev.decentebar.util.formatDecimals
 import kotlin.math.abs
 
 class PressureLutManager(
@@ -115,5 +116,5 @@ class PressureLutManager(
         )
     }
 
-    private fun Double.formatBar(): String = String.format(java.util.Locale.US, "%.2f", this)
+    private fun Double.formatBar(): String = formatDecimals(2)
 }

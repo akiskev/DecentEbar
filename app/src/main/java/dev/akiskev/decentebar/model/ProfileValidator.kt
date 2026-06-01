@@ -23,11 +23,12 @@ object ProfileValidator {
                     if (stage.fixedPressureBar == null) add("$prefix fixed pressure is required")
                 }
                 StageType.FLOW_LIMITED_PRESSURE -> {
+                    // Only pressure cap and target flow are required. Deadband, pressure step and
+                    // correction interval are optional: when null they are auto-tuned at runtime
+                    // (see ShotController.runFlowLimitedStage), which is how the default profile and
+                    // the profile editor leave them.
                     if (stage.pressureCapBar == null) add("$prefix pressure cap is required")
                     if (stage.targetFlowGps == null) add("$prefix target flow is required")
-                    if (stage.flowDeadbandGps == null) add("$prefix deadband is required")
-                    if (stage.pressureStepBar == null) add("$prefix pressure step is required")
-                    if (stage.correctionIntervalMs == null) add("$prefix correction interval is required")
                 }
                 StageType.WEIGHT_BASED_PRESSURE_RAMP -> {
                     if (stage.rampEndPressureBar == null) add("$prefix end pressure is required")
