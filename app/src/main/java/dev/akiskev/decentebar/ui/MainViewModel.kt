@@ -2,6 +2,7 @@ package dev.akiskev.decentebar.ui
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.akiskev.decentebar.accessibility.EbarAccessibilityService
@@ -10,6 +11,9 @@ import dev.akiskev.decentebar.engine.FlowEstimator
 import dev.akiskev.decentebar.engine.PressureLutManager
 import dev.akiskev.decentebar.model.BuiltInPressureLut
 import dev.akiskev.decentebar.model.DefaultProfiles
+import dev.akiskev.decentebar.model.EbarSnapshot
+import dev.akiskev.decentebar.model.PressureLut
+import dev.akiskev.decentebar.model.PressurePoint
 import dev.akiskev.decentebar.model.ProfileValidator
 import dev.akiskev.decentebar.model.SafetyConfig
 import dev.akiskev.decentebar.model.ShotLog
@@ -20,6 +24,7 @@ import dev.akiskev.decentebar.storage.ShotLogCodec
 import dev.akiskev.decentebar.storage.ShotVideoExporter
 import dev.akiskev.decentebar.util.screenSizePx
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,7 +59,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val profiles = profileRepository.loadProfiles()
-        val selected = profiles.firstOrNull() ?: DefaultProfiles.flow34
+        val selected = profiles.firstOrNull() ?: DefaultProfiles.flow33Dark
         val (initW, initH) = screenSizePx(application)
         val lut = BuiltInPressureLut.buildFor(initW, initH)
         _uiState.update {
@@ -318,6 +323,109 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Sweeps the pressure bar through a range of Y positions, reading the value the
+     * e-bar actually shows at each (settled), and builds an exact pressure→Y LUT from
+     * the measured points. Run with the e-bar pressure screen open and no shot running.
+     * The resulting LUT is applied for the session and its per-bar fractions are logged
+     * (tag DecentEbar) so they can be baked into [BuiltInPressureLut] permanently.
+     */
+    fun calibratePressureBar() {
+        viewModelScope.launch {
+            val service = EbarAccessibilityService.current()
+            if (service == null) {
+                _uiState.update { it.copy(calibrationMessage = "Accessibility service not connected") }
+                return@launch
+            }
+
+            _uiState.update { it.copy(calibrationMessage = "Open the e-bar pressure screen now…") }
+            delay(4_000)
+
+            val probe = service.captureSnapshot()
+            val bar = BuiltInPressureLut.findPressureBar(probe.nodes, probe.screenWidth, probe.screenHeight)
+            if (bar == null) {
+                _uiState.update { it.copy(calibrationMessage = "Pressure bar not found — open the e-bar pressure screen and retry") }
+                return@launch
+            }
+
+            val x = bar.centerX.toFloat()
+            val top = bar.top.toFloat()
+            val bottom = bar.bottom.toFloat()
+            val mid = (top + bottom) / 2f
+            val height = bottom - top
+
+            // Sweep within the active track, staying clear of the "Pr." label dead zone
+            // at the bottom, from the low-pressure end up to the high-pressure end.
+            val yLowPressure = bottom - 80f
+            val yHighPressure = top + 25f
+            val steps = 24
+            val samples = mutableListOf<Pair<Float, Double>>()
+
+            for (i in 0..steps) {
+                val y = yLowPressure + (yHighPressure - yLowPressure) * (i.toFloat() / steps)
+                val toward = if (y <= mid) CALIBRATION_HOP_PX else -CALIBRATION_HOP_PX
+                val startY = (y + toward).coerceIn(top, bottom)
+                service.dispatchSwipe(x, startY, x, y)
+                delay(650)
+                val reading = readBarPressureValue(service.captureSnapshot())
+                if (reading != null) {
+                    samples.add(y to reading)
+                    Log.i(CALIB_TAG, "calib step $i: y=${y.toInt()} reads ${"%.2f".format(reading)} bar")
+                }
+                _uiState.update { it.copy(calibrationMessage = "Calibrating… ${i + 1}/${steps + 1}") }
+            }
+
+            if (samples.size < 5) {
+                _uiState.update { it.copy(calibrationMessage = "Calibration failed — only ${samples.size} readings") }
+                return@launch
+            }
+
+            val points = (0..12).map { barValue ->
+                val y = yForBar(samples, barValue.toDouble())
+                Log.i(CALIB_TAG, "calib LUT: $barValue bar -> y=${y.toInt()} (frac=${"%.4f".format((y - top) / height)})")
+                PressurePoint(barValue.toDouble(), x, y)
+            }
+            val lut = PressureLut(
+                name = "E-Bar pressure LUT (calibrated)",
+                screenWidth = maxOf(probe.screenWidth, probe.screenHeight),
+                screenHeight = minOf(probe.screenWidth, probe.screenHeight),
+                orientation = "landscape",
+                points = points
+            )
+            val validation = controller.validateLut(probe, lut, requireForegroundPackage = false)
+            _uiState.update {
+                it.copy(
+                    loadedLut = lut,
+                    lutCalibrated = true,
+                    lutValidation = validation,
+                    calibrationMessage = "Calibrated from ${samples.size} readings — applied"
+                )
+            }
+        }
+    }
+
+    private fun readBarPressureValue(snapshot: EbarSnapshot): Double? {
+        val bar = BuiltInPressureLut.findPressureBar(snapshot.nodes, snapshot.screenWidth, snapshot.screenHeight) ?: return null
+        val desc = bar.contentDescription ?: return null
+        return desc.split('\n', ' ', '\t').firstNotNullOfOrNull { it.trim().toDoubleOrNull() }
+    }
+
+    /** Interpolates the measured (Y, pressure) samples to find the Y for a given bar. */
+    private fun yForBar(samples: List<Pair<Float, Double>>, bar: Double): Float {
+        val sorted = samples.sortedBy { it.second }
+        if (bar <= sorted.first().second) return sorted.first().first
+        if (bar >= sorted.last().second) return sorted.last().first
+        for (i in 1 until sorted.size) {
+            val (y0, p0) = sorted[i - 1]
+            val (y1, p1) = sorted[i]
+            if (bar in p0..p1) {
+                val t = if (p1 == p0) 0.0 else (bar - p0) / (p1 - p0)
+                return (y0 + (y1 - y0) * t).toFloat()
+            }
+        }
+        return sorted.last().first
+    }
+
     fun testPressure(pressureText: String) {
         val pressure = pressureText.toDoubleOrNull()
         if (pressure == null) {
@@ -329,5 +437,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update { it.copy(snapshot = fresh, lutValidation = validation) }
         }
         controller.commandPressure(pressure, System.currentTimeMillis(), force = true, source = "Manual LUT test")
+    }
+
+    private companion object {
+        const val CALIB_TAG = "DecentEbar"
+        const val CALIBRATION_HOP_PX = 100f
     }
 }

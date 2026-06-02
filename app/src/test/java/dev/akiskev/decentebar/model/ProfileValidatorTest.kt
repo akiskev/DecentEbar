@@ -6,7 +6,7 @@ import org.junit.Test
 class ProfileValidatorTest {
     @Test
     fun defaultProfileIsValid() {
-        assertTrue(ProfileValidator.validate(DefaultProfiles.flow34).isEmpty())
+        assertTrue(ProfileValidator.validate(DefaultProfiles.flow33Dark).isEmpty())
     }
 
     @Test

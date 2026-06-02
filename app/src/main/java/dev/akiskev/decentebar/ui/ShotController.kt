@@ -1,5 +1,6 @@
 package dev.akiskev.decentebar.ui
 
+import android.util.Log
 import dev.akiskev.decentebar.accessibility.EbarAccessibilityService
 import dev.akiskev.decentebar.ble.ScaleConnectionState
 import dev.akiskev.decentebar.ble.ScaleReading
@@ -58,6 +59,13 @@ class ShotController(
     private var flowCapWarningLoggedForCurrentStage = false
     private var lastFlowCorrectionMs: Long? = null
     private var lastCorrectionFlowGps: Double? = null
+
+    // Stall detection for the pressure slider: the target Y of the last issued slide and
+    // the live reading just before it, used to notice when re-sliding to an unreachable
+    // target (e.g. 0 bar floors near ~0.4) stops moving the bar so we hold instead of
+    // jittering.
+    private var lastSlideTargetBar: Double? = null
+    private var lastSlideActualBar: Double? = null
 
     fun arm() {
         val service = EbarAccessibilityService.current()
@@ -129,7 +137,8 @@ class ShotController(
     fun onSnapshot(snapshot: EbarSnapshot) {
         val nowMs = snapshot.timestampMs.takeIf { it > 0L } ?: now()
         val current = state.value
-        val nextLut = lutForScreen(snapshot.screenWidth, snapshot.screenHeight, current.loadedLut)
+        // A measured calibration takes precedence over the auto-anchored formula.
+        val nextLut = if (current.lutCalibrated) current.loadedLut else lutForScreen(snapshot, current.loadedLut)
         val validation = validateLut(snapshot, nextLut, requireForegroundPackage = false)
         val nextWeight = snapshot.weightG ?: current.currentWeightG
         val serviceEnabled = EbarAccessibilityService.current() != null
@@ -204,6 +213,8 @@ class ShotController(
         lastValidWeightMs = snapshot.weightG?.let { nowMs }
         flowEstimator.reset()
         lutManager.resetThrottle()
+        lastSlideTargetBar = null
+        lastSlideActualBar = null
         firstDropConsecutiveReadings = 0
         firstDropDetected = false
         stopSent = false
@@ -217,7 +228,11 @@ class ShotController(
                 currentStageIndex = 0,
                 elapsedShotTimeMs = 0L,
                 safetyStatus = "Running",
-                currentWeightG = snapshot.weightG
+                currentWeightG = snapshot.weightG,
+                // The machine resets the slider to 0 bar at shot start, so the first
+                // pressure swipe of each shot must drag from there (not a stale value
+                // left over from a previous shot).
+                commandedPressureBar = null
             )
         }
     }
@@ -554,37 +569,81 @@ class ShotController(
             return false
         }
 
+        // The e-bar slider is absolute (the release Y sets the value) and the LUT is
+        // measured, so we slide to the target's Y. Run closed-loop against the live
+        // reading: the e-bar drops the first slide or two right after Start, so re-slide
+        // until the bar confirms it landed, then hold (the closed-loop deadband is wider
+        // than the landing jitter, so it settles instead of oscillating).
+        val actual = readBarPressure(current.snapshot)
+
         val result = lutManager.requestPressure(
             lut = current.loadedLut,
             screen = screenSpec(current.snapshot),
             requestedPressureBar = requestedPressureBar,
             nowMs = nowMs,
-            force = force
+            force = force,
+            currentActualBar = actual
         )
 
         if (!result.accepted) {
+            // Routine throttle/deadband drops happen many times per second on a fixed
+            // stage; only log the rejections that signal an actual problem.
+            if (!result.message.startsWith("Suppressed")) {
+                Log.i(
+                    LOG_TAG,
+                    "pressure[$source] req=${requestedPressureBar.fmt(2)} REJECTED: ${result.message} " +
+                        "(lut=${current.loadedLut?.name ?: "null"}, pkg=${current.snapshot.activePackage}, " +
+                        "screen=${current.snapshot.screenWidth}x${current.snapshot.screenHeight})"
+                )
+            }
             state.update { it.copy(lastPressureCommand = result.message) }
             return false
         }
 
         val point = result.point ?: return false
-        val tapped = service.dispatchTap(point.x, point.y)
-        if (!tapped) {
-            fail("Failed to dispatch pressure tap", attemptStop = false)
-            return false
+        val target = result.pressureBar ?: requestedPressureBar
+        val lut = current.loadedLut ?: return false
+
+        // Stall detection: if the previous slide to this same target left the reading
+        // unchanged AND we're already near the target, the bar is as close as it can get
+        // (e.g. 0 bar floors ~0.4) — hold rather than re-slide and jitter. Only applies
+        // when already near target, so the far-from-target start-up retries still run.
+        val sameTarget = lastSlideTargetBar?.let { abs(target - it) < 0.05 } == true
+        val unchanged = actual != null && lastSlideActualBar?.let { abs(actual - it) < STALL_EPSILON_BAR } == true
+        val nearTarget = actual != null && abs(target - actual) < STALL_HOLD_BAND_BAR
+        if (sameTarget && unchanged && nearTarget) {
+            state.update {
+                it.copy(lastPressureCommand = "$source: holding ${actual?.fmt(2)} bar (target ${target.fmt(2)}, bar floored)")
+            }
+            return true
         }
 
-        val pressure = result.pressureBar ?: requestedPressureBar
+        // Absolute slide: the release Y sets the value. Start a short hop toward the
+        // bar's active centre so touch-down is never on the dead zone at the extreme ends.
+        val startY = pressureSwipeStartY(lut, point.y)
+        val swiped = service.dispatchSwipe(point.x, startY, point.x, point.y)
+        Log.i(
+            LOG_TAG,
+            "pressure[$source] target=${target.fmt(2)} barReads=${actual?.fmt(2) ?: "??"} " +
+                "slide x=${point.x.toInt()} y ${startY.toInt()}->${point.y.toInt()} dispatched=$swiped"
+        )
+        if (!swiped) {
+            fail("Failed to dispatch pressure swipe", attemptStop = false)
+            return false
+        }
+        lastSlideTargetBar = target
+        lastSlideActualBar = actual
+
         state.update {
             it.copy(
-                commandedPressureBar = pressure,
-                lastPressureCommand = "$source: ${pressure.fmt(2)} bar -> ${point.x.toInt()},${point.y.toInt()}"
+                commandedPressureBar = target,
+                lastPressureCommand = "$source: ${actual?.fmt(2) ?: "?"}->${target.fmt(2)} bar"
             )
         }
         recordEvent(
             ShotEventType.PRESSURE_COMMAND,
-            "$source commanded ${pressure.fmt(2)} bar",
-            pressureBar = pressure
+            "$source -> ${target.fmt(2)} bar",
+            pressureBar = target
         )
         return true
     }
@@ -752,10 +811,52 @@ class ShotController(
         )
     }
 
-    private fun lutForScreen(width: Int, height: Int, current: PressureLut?): PressureLut? {
+    /**
+     * Reads the pressure value the e-bar is currently showing, parsed from the pressure
+     * bar node's content-desc (e.g. "7.0\nbar\nPr."). Lets the log compare what we
+     * commanded against what the machine actually displays.
+     */
+    private fun readBarPressure(snapshot: EbarSnapshot): Double? {
+        val bar = BuiltInPressureLut.findPressureBar(snapshot.nodes, snapshot.screenWidth, snapshot.screenHeight)
+        val desc = bar?.contentDescription ?: return null
+        return desc.split('\n', ' ', '\t').firstNotNullOfOrNull { it.trim().toDoubleOrNull() }
+    }
+
+    /**
+     * Picks the Y to begin an absolute pressure slide from, given the release [targetY].
+     * The slide only needs enough travel to register (not a tap) and its start must not
+     * land on the dead zone at the extreme ends — so we start [SWIPE_TRAVEL_PX] toward
+     * the bar's active centre and release at the target. Only the release position sets
+     * the value, so the start being merely near the target is fine.
+     */
+    private fun pressureSwipeStartY(lut: PressureLut?, targetY: Float): Float {
+        val ys = lut?.points?.map { it.y }
+        val minY = ys?.min() ?: (targetY - MIN_SWIPE_TRAVEL_PX)
+        val maxY = ys?.max() ?: (targetY + MIN_SWIPE_TRAVEL_PX)
+        val midY = (minY + maxY) / 2f
+        // Travel scales with the bar's on-screen span so it works across resolutions.
+        val travel = ((maxY - minY) * SWIPE_TRAVEL_FRACTION).coerceAtLeast(MIN_SWIPE_TRAVEL_PX)
+        val toward = if (targetY <= midY) travel else -travel
+        return (targetY + toward).coerceIn(minY, maxY)
+    }
+
+    private fun lutForScreen(snapshot: EbarSnapshot, current: PressureLut?): PressureLut? {
+        val width = snapshot.screenWidth
+        val height = snapshot.screenHeight
         if (width <= 0 || height <= 0) return current
         val longSide = maxOf(width, height)
         val shortSide = minOf(width, height)
+
+        // Prefer a LUT anchored to the live pressure bar so the tap coordinates track
+        // wherever the current e-bar version places it. Reuse the existing object when
+        // the derived points are unchanged so we don't churn state every snapshot.
+        val anchored = BuiltInPressureLut.buildAnchored(snapshot.nodes, width, height)
+        if (anchored != null) {
+            return if (current == anchored) current else anchored
+        }
+
+        // No bar visible (app backgrounded or layout not recognised): keep a matching
+        // LUT if we have one, otherwise fall back to the static built-in calibration.
         if (current != null && current.screenWidth == longSide && current.screenHeight == shortSide) return current
         return BuiltInPressureLut.buildFor(width, height) ?: current
     }
@@ -769,6 +870,20 @@ class ShotController(
     private fun Double.fmt(decimals: Int): String = formatDecimals(decimals)
 
     companion object {
+        const val LOG_TAG = "DecentEbar"
         private const val MAX_LOG_ITEMS = 2_000
+
+        // How far toward the bar's centre an absolute pressure slide starts before
+        // releasing at the target: enough travel to register as a drag (not a tap, which
+        // opens a popup) while keeping touch-down off the dead zone at the bar's ends.
+        // A fraction of the bar's span (resolution-independent) with an absolute floor.
+        private const val SWIPE_TRAVEL_FRACTION = 0.11f
+        private const val MIN_SWIPE_TRAVEL_PX = 60f
+
+        // Stall detection: a re-slide that changes the reading by less than this is "no
+        // movement"; only give up (hold) when the bar is already within this band of the
+        // target, so far-from-target start-up retries are unaffected.
+        private const val STALL_EPSILON_BAR = 0.25
+        private const val STALL_HOLD_BAND_BAR = 1.0
     }
 }

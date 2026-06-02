@@ -1,7 +1,7 @@
 package dev.akiskev.decentebar.engine
 
-import dev.akiskev.decentebar.model.EBAR_PACKAGE_NAME
 import dev.akiskev.decentebar.model.LutValidationResult
+import dev.akiskev.decentebar.model.isEbarPackage
 import dev.akiskev.decentebar.model.PressureCommandResult
 import dev.akiskev.decentebar.model.PressureLut
 import dev.akiskev.decentebar.model.PressurePoint
@@ -35,9 +35,9 @@ class PressureLutManager(
             if (!lut.orientation.equals(screen.orientation, ignoreCase = true)) {
                 add("LUT orientation ${lut.orientation} != ${screen.orientation}")
             }
-            if (lut.packageName != EBAR_PACKAGE_NAME) add("LUT package ${lut.packageName} != $EBAR_PACKAGE_NAME")
-            if (requireForegroundPackage && screen.packageName != EBAR_PACKAGE_NAME) {
-                add("Active package ${screen.packageName ?: "unknown"} != $EBAR_PACKAGE_NAME")
+            if (!isEbarPackage(lut.packageName)) add("LUT package ${lut.packageName} is not an e-bar package")
+            if (requireForegroundPackage && !isEbarPackage(screen.packageName)) {
+                add("Active package ${screen.packageName ?: "unknown"} is not an e-bar package")
             }
 
             val minPoint = lut.points.minOfOrNull { it.pressureBar }
@@ -70,7 +70,8 @@ class PressureLutManager(
         screen: ScreenSpec,
         requestedPressureBar: Double,
         nowMs: Long,
-        force: Boolean = false
+        force: Boolean = false,
+        currentActualBar: Double? = null
     ): PressureCommandResult {
         val validation = validate(lut, screen, requireForegroundPackage = true)
         if (!validation.isValid || lut == null) {
@@ -84,12 +85,17 @@ class PressureLutManager(
             )
         }
 
-        val lastPressure = lastPressureBar
-        if (!force && lastPressure != null && abs(requestedPressureBar - lastPressure) < safetyConfig.minPressureDeltaBar) {
+        // When the live reading is supplied, run closed-loop: keep re-sliding while the
+        // bar is off target (this also recovers slides the e-bar drops just after Start),
+        // and stop once within the wider closed-loop deadband so it doesn't oscillate on
+        // landing jitter. Otherwise deadband against the last commanded value.
+        val baseline = currentActualBar ?: lastPressureBar
+        val deadband = if (currentActualBar != null) safetyConfig.closedLoopDeadbandBar else safetyConfig.minPressureDeltaBar
+        if (!force && baseline != null && abs(requestedPressureBar - baseline) < deadband) {
             return PressureCommandResult(
                 accepted = false,
-                message = "Suppressed pressure delta below ${safetyConfig.minPressureDeltaBar.formatBar()} bar",
-                pressureBar = lastPressure
+                message = "Suppressed pressure delta below ${deadband.formatBar()} bar",
+                pressureBar = baseline
             )
         }
 
@@ -99,7 +105,7 @@ class PressureLutManager(
             return PressureCommandResult(
                 accepted = false,
                 message = "Suppressed pressure command throttle (${elapsedMs}ms)",
-                pressureBar = lastPressure
+                pressureBar = baseline
             )
         }
 

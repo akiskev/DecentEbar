@@ -73,6 +73,18 @@ internal fun LutScreen(state: MainUiState, viewModel: MainViewModel) {
         }
 
         item {
+            Panel("Calibrate") {
+                Text(
+                    "Open the e-bar pressure screen with no shot running, then press Calibrate. " +
+                        "The bar is swept and each position's reading is measured to build an exact LUT.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Button(onClick = viewModel::calibratePressureBar) { Text("Calibrate Bar") }
+                MessageLine(state.calibrationMessage)
+            }
+        }
+
+        item {
             Panel("Export JSON") {
                 OutlinedTextField(
                     value = state.exportedLutJson,

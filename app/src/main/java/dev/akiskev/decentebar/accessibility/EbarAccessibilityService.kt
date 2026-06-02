@@ -3,12 +3,15 @@ package dev.akiskev.decentebar.accessibility
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
+import android.graphics.Rect
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import dev.akiskev.decentebar.engine.EbarParser
-import dev.akiskev.decentebar.model.EBAR_PACKAGE_NAME
+import dev.akiskev.decentebar.model.AccessibilityNodeBounds
 import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.SafetyConfig
+import dev.akiskev.decentebar.model.isEbarPackage
 import dev.akiskev.decentebar.util.screenSizePx
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 class EbarAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -86,6 +90,39 @@ class EbarAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
+    /**
+     * Drags from (startX, startY) to (endX, endY). The e-bar 3.1.0 pressure bar is a
+     * slider that only moves on a swipe with enough travel — a plain tap opens a
+     * manual-entry popup instead — so pressure is set by sliding to the target Y and
+     * releasing there.
+     */
+    fun dispatchSwipe(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float
+    ): Boolean {
+        // Duration scales with distance to hold a roughly constant drag velocity: a big
+        // jump dispatched over a fixed short time reads as a fling (the slider ignores
+        // the release position), while the same path drawn slower registers as a drag.
+        val distance = abs(endY - startY) + abs(endX - startX)
+        val durationMs = (distance / SWIPE_VELOCITY_PX_PER_MS).toLong()
+            .coerceIn(MIN_SWIPE_DURATION_MS, MAX_SWIPE_DURATION_MS)
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0L, durationMs))
+            .build()
+        val callback = object : GestureResultCallback() {
+            override fun onCancelled(description: GestureDescription?) {
+                Log.w(LOG_TAG, "pressure swipe CANCELLED ${startX.toInt()},${startY.toInt()}->${endX.toInt()},${endY.toInt()}")
+            }
+        }
+        return dispatchGesture(gesture, callback, null)
+    }
+
     fun publishSnapshot() {
         _snapshots.value = captureSnapshot()
     }
@@ -95,7 +132,7 @@ class EbarAccessibilityService : AccessibilityService() {
         val packageName = root.packageName?.toString()
         val (screenWidth, screenHeight) = screenSize()
 
-        if (packageName != EBAR_PACKAGE_NAME) {
+        if (!isEbarPackage(packageName)) {
             return EbarParser.parseSnapshot(
                 activePackage = packageName,
                 rawDescriptions = emptyList(),
@@ -109,7 +146,8 @@ class EbarAccessibilityService : AccessibilityService() {
 
         val descriptions = mutableListOf<String>()
         val texts = mutableListOf<String>()
-        collectVisibleNodeValues(root, descriptions, texts)
+        val nodes = mutableListOf<AccessibilityNodeBounds>()
+        collectVisibleNodeValues(root, descriptions, texts, nodes)
 
         return EbarParser.parseSnapshot(
             activePackage = packageName,
@@ -119,22 +157,43 @@ class EbarAccessibilityService : AccessibilityService() {
             screenHeight = screenHeight,
             timestampMs = now(),
             maxWeightG = SafetyConfig().maxReadableWeightG,
+            nodes = nodes,
         )
     }
 
     private fun collectVisibleNodeValues(
         node: AccessibilityNodeInfo,
         descriptions: MutableList<String>,
-        texts: MutableList<String>
+        texts: MutableList<String>,
+        nodes: MutableList<AccessibilityNodeBounds>
     ) {
         if (node.isVisibleToUser) {
-            node.contentDescription?.toString()?.takeIf(String::isNotBlank)?.let(descriptions::add)
-            node.text?.toString()?.takeIf(String::isNotBlank)?.let(texts::add)
+            val description = node.contentDescription?.toString()?.takeIf(String::isNotBlank)
+            val text = node.text?.toString()?.takeIf(String::isNotBlank)
+            description?.let(descriptions::add)
+            text?.let(texts::add)
+
+            val bounds = Rect().also(node::getBoundsInScreen)
+            if (!bounds.isEmpty) {
+                nodes.add(
+                    AccessibilityNodeBounds(
+                        text = text,
+                        contentDescription = description,
+                        className = node.className?.toString(),
+                        left = bounds.left,
+                        top = bounds.top,
+                        right = bounds.right,
+                        bottom = bounds.bottom,
+                        clickable = node.isClickable,
+                        scrollable = node.isScrollable
+                    )
+                )
+            }
         }
 
         repeat(node.childCount) { index ->
             node.getChild(index)?.let { child ->
-                collectVisibleNodeValues(child, descriptions, texts)
+                collectVisibleNodeValues(child, descriptions, texts, nodes)
             }
         }
     }
@@ -170,8 +229,15 @@ class EbarAccessibilityService : AccessibilityService() {
     private fun now(): Long = System.currentTimeMillis()
 
     companion object {
+        private const val LOG_TAG = "DecentEbar"
         private const val POLL_INTERVAL_MS = 50L
         private const val TAP_DURATION_MS = 70L
+        // Drag velocity for pressure swipes. ~117px swipes at 150ms (≈0.78 px/ms)
+        // registered as drags; ~449px at 150ms (≈3.0 px/ms) flung past the target and
+        // were ignored. Hold velocity near the known-good drag rate and clamp duration.
+        private const val SWIPE_VELOCITY_PX_PER_MS = 0.7f
+        private const val MIN_SWIPE_DURATION_MS = 120L
+        private const val MAX_SWIPE_DURATION_MS = 800L
 
         private var instance: EbarAccessibilityService? = null
         private val _isEnabled = MutableStateFlow(false)

@@ -129,7 +129,7 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                             OutlinedButton(onClick = viewModel::exportSelectedProfile) { Text("Export") }
                         }
                         OutlinedButton(
-                            onClick = { editedProfile = DefaultProfiles.flow34.copy(name = "New Profile") },
+                            onClick = { editedProfile = DefaultProfiles.flow33Dark.copy(name = "New Profile") },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("New Profile") }
                         MessageLine(state.profileMessage)

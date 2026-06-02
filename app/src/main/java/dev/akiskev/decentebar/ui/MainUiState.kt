@@ -15,9 +15,13 @@ data class MainUiState(
     val controllerState: ControllerState = ControllerState.IDLE,
     val serviceEnabled: Boolean = false,
     val snapshot: EbarSnapshot = EbarSnapshot(),
-    val profiles: List<ShotProfile> = listOf(DefaultProfiles.flow34),
-    val selectedProfile: ShotProfile = DefaultProfiles.flow34,
+    val profiles: List<ShotProfile> = listOf(DefaultProfiles.flow33Dark),
+    val selectedProfile: ShotProfile = DefaultProfiles.flow33Dark,
     val loadedLut: PressureLut? = null,
+    // Set once a measured calibration sweep has produced the LUT, so the per-snapshot
+    // auto-anchor stops overwriting it with the formula-derived one.
+    val lutCalibrated: Boolean = false,
+    val calibrationMessage: String = "",
     val lutValidation: LutValidationResult = LutValidationResult.Missing,
     val currentWeightG: Double? = null,
     val currentFlowGps: Double = 0.0,

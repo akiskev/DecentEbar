@@ -15,9 +15,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.akiskev.decentebar.ble.ScaleConnectionState
+import dev.akiskev.decentebar.model.BuiltInPressureLut
 
 @Composable
 internal fun DebugScreen(state: MainUiState) {
+    val snapshot = state.snapshot
+    val barNode = BuiltInPressureLut.findPressureBar(snapshot.nodes, snapshot.screenWidth, snapshot.screenHeight)
+    val anchoredLut = barNode?.let {
+        BuiltInPressureLut.buildAnchoredFrom(it, snapshot.screenWidth, snapshot.screenHeight)
+    }
+    val zeroBar = anchoredLut?.points?.firstOrNull { it.pressureBar == 0.0 }
+    val twelveBar = anchoredLut?.points?.firstOrNull { it.pressureBar == 12.0 }
+
     val snapshotMetrics = listOf(
         "Active package" to (state.snapshot.activePackage ?: "--"),
         "Screen" to "${state.snapshot.screenWidth} x ${state.snapshot.screenHeight}",
@@ -30,6 +39,14 @@ internal fun DebugScreen(state: MainUiState) {
         "Last pressure cmd" to state.lastPressureCommand,
         "Last stop cmd" to state.lastStopCommand,
         "Last safety error" to state.lastSafetyError
+    )
+
+    val anchorMetrics = listOf(
+        "Pressure LUT source" to (state.loadedLut?.name ?: "--"),
+        "Bar node bounds" to (barNode?.let { "[${it.left},${it.top}][${it.right},${it.bottom}]" } ?: "not found"),
+        "Bar node class" to (barNode?.className?.substringAfterLast('.') ?: "--"),
+        "0 bar tap" to (zeroBar?.let { "${it.x.toInt()}, ${it.y.toInt()}" } ?: "--"),
+        "12 bar tap" to (twelveBar?.let { "${it.x.toInt()}, ${it.y.toInt()}" } ?: "--")
     )
     val scaleConnected = state.scaleConnectionState == ScaleConnectionState.CONNECTED
     val flowDiff = state.currentFlowGps - state.currentCalcFlowGps
@@ -64,15 +81,22 @@ internal fun DebugScreen(state: MainUiState) {
             Panel("Accessibility Snapshot") {
                 MetricGrid(snapshotMetrics)
             }
+            Panel("Pressure Bar Anchor") {
+                MetricGrid(anchorMetrics)
+            }
         }
         Column(
             modifier = Modifier.weight(0.5f).fillMaxHeight(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Panel("Raw content-desc", modifier = Modifier.weight(1f), fillContent = true) {
+            Panel("Node bounds", modifier = Modifier.weight(1f), fillContent = true) {
                 LazyColumn(Modifier.fillMaxSize()) {
-                    items(state.snapshot.rawDescriptions.take(160)) { desc ->
-                        Text(desc, style = MaterialTheme.typography.bodySmall)
+                    items(state.snapshot.nodes.take(160)) { node ->
+                        val tag = node.label ?: node.className?.substringAfterLast('.') ?: "?"
+                        Text(
+                            "[${node.left},${node.top}][${node.right},${node.bottom}] $tag",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
             }

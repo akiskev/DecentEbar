@@ -1,7 +1,8 @@
 package dev.akiskev.decentebar.engine
 
-import dev.akiskev.decentebar.model.EBAR_PACKAGE_NAME
+import dev.akiskev.decentebar.model.AccessibilityNodeBounds
 import dev.akiskev.decentebar.model.EbarSnapshot
+import dev.akiskev.decentebar.model.isEbarPackage
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -17,11 +18,12 @@ object EbarParser {
         screenWidth: Int,
         screenHeight: Int,
         timestampMs: Long,
-        maxWeightG: Double
+        maxWeightG: Double,
+        nodes: List<AccessibilityNodeBounds> = emptyList()
     ): EbarSnapshot {
         val allValues = (rawDescriptions + rawTexts).mapNotNull { it.takeIf(String::isNotBlank) }
         val normalizedControls = allValues.map { normalizeControlText(it) }
-        val isForeground = activePackage == EBAR_PACKAGE_NAME
+        val isForeground = isEbarPackage(activePackage)
         val orientation = when {
             screenWidth > screenHeight -> "landscape"
             screenHeight > screenWidth -> "portrait"
@@ -41,6 +43,7 @@ object EbarParser {
             weightG = parseWeight(allValues, maxWeightG),
             rawDescriptions = rawDescriptions,
             rawTexts = rawTexts,
+            nodes = nodes,
             screenWidth = screenWidth,
             screenHeight = screenHeight,
             orientation = orientation
