@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.ExitCondition
 import dev.akiskev.decentebar.model.ExitMode
+import dev.akiskev.decentebar.model.FeedForwardConfig
 import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.StageSafety
 import dev.akiskev.decentebar.model.StageType
@@ -411,9 +412,18 @@ private fun StageEditor(
                             unit = "g/s",
                             onChange = { onStageChange(stage.copy(targetFlowGps = it)) }
                         )
+                        val feedForwardOn = stage.feedForward != null
+                        LabeledSwitch("Resistance feed-forward", feedForwardOn) { on ->
+                            onStageChange(stage.copy(feedForward = if (on) FeedForwardConfig() else null))
+                        }
                         Text(
-                            "Deadband, step and correction interval are auto-tuned" +
-                                " (faster with BLE scale). Override via JSON import.",
+                            if (feedForwardOn) {
+                                "Feed-forward (experimental): commands pressure from the puck's" +
+                                    " learned resistance, with gusher-safe recovery. Tuning via JSON import."
+                            } else {
+                                "Legacy auto-tune: deadband, step and correction interval are auto-tuned" +
+                                    " (faster with BLE scale). Override via JSON import."
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )

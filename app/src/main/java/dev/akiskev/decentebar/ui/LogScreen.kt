@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
@@ -20,10 +21,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +47,13 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
     var pendingLogJson by remember { mutableStateOf<String?>(null) }
     var pendingLogHtml by remember { mutableStateOf<String?>(null) }
     var pendingFilenameBase by remember { mutableStateOf("") }
+
+    // Save dialog: required shot metadata, pre-filled with the last entry for the session.
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var mdBeans by rememberSaveable { mutableStateOf("") }
+    var mdGrind by rememberSaveable { mutableStateOf("") }
+    var mdDose by rememberSaveable { mutableStateOf("") }
+    var mdNotes by rememberSaveable { mutableStateOf("") }
 
     val saveHtmlLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/html")
@@ -162,15 +172,11 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = viewModel::exportShotLog) { Text("Export Log") }
                     OutlinedButton(onClick = {
-                        val log = viewModel.currentShotLog() ?: return@OutlinedButton
-                        val json = viewModel.currentShotLogJson()
-                        if (json.isBlank()) return@OutlinedButton
-                        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-                        val base = "${sanitizeFilename(state.selectedProfile.name)}-$ts"
-                        pendingLogJson = json
-                        pendingLogHtml = ShotHtmlExporter.export(log)
-                        pendingFilenameBase = base
-                        saveLogLauncher.launch("$base.json")
+                        if (state.samples.isEmpty() && state.events.isEmpty()) {
+                            viewModel.setLogMessage("No shot data to save")
+                        } else {
+                            showSaveDialog = true
+                        }
                     }) { Text("Save to File") }
                     OutlinedButton(onClick = viewModel::resetShotLog) { Text("Clear") }
                 }
@@ -261,6 +267,67 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                 )
             }
         }
+    }
+
+    if (showSaveDialog) {
+        val dose = mdDose.toDoubleOrNull()
+        val canSave = mdBeans.isNotBlank() && mdGrind.isNotBlank() && dose != null && dose > 0
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("Shot details") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Required before saving, so the log is useful for analysis.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = mdBeans, onValueChange = { mdBeans = it },
+                        label = { Text("Beans *") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = mdGrind, onValueChange = { mdGrind = it },
+                        label = { Text("Grind setting *") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = mdDose, onValueChange = { mdDose = it },
+                        label = { Text("Dose (g) *") }, singleLine = true,
+                        isError = mdDose.isNotBlank() && dose == null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = mdNotes, onValueChange = { mdNotes = it },
+                        label = { Text("Notes (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = canSave,
+                    onClick = {
+                        val metadata = ShotMetadata(mdBeans.trim(), mdGrind.trim(), dose, mdNotes.trim())
+                        val log = viewModel.currentShotLog(metadata)
+                        showSaveDialog = false
+                        if (log == null) {
+                            viewModel.setLogMessage("No shot data to save")
+                            return@TextButton
+                        }
+                        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                        val base = "${sanitizeFilename(state.selectedProfile.name)}-$ts"
+                        pendingLogJson = ShotLogCodec.encode(log)
+                        pendingLogHtml = ShotHtmlExporter.export(log)
+                        pendingFilenameBase = base
+                        saveLogLauncher.launch("$base.json")
+                    }
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 

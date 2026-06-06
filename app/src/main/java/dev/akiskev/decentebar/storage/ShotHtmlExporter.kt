@@ -91,8 +91,13 @@ ${chartScript()}
             parts += "Duration: ${"%.1f".format((stop - start) / 1000.0)}s"
         }
         log.samples.lastOrNull()?.weightG?.let { parts += "Final weight: ${"%.1f".format(it)}g" }
+        log.beansName?.let { parts += "Beans: $it" }
+        log.grindSetting?.let { parts += "Grind: $it" }
+        log.doseG?.let { parts += "Dose: ${"%.1f".format(it)}g" }
         val stageCount = log.samples.map { it.stageName }.distinct().size
         parts += "$stageCount stages · ${log.samples.size} samples · ${log.events.size} events"
+        log.flowSource?.let { parts += "Flow: $it" }
+        log.appVersion?.let { parts += "App: $it" }
         return parts.joinToString(" · ")
     }
 

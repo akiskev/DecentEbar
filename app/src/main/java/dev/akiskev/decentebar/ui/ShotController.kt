@@ -5,11 +5,13 @@ import dev.akiskev.decentebar.accessibility.EbarAccessibilityService
 import dev.akiskev.decentebar.ble.ScaleConnectionState
 import dev.akiskev.decentebar.ble.ScaleReading
 import dev.akiskev.decentebar.engine.FlowEstimator
+import dev.akiskev.decentebar.engine.FlowFeedForwardController
 import dev.akiskev.decentebar.engine.PressureLutManager
 import dev.akiskev.decentebar.model.BuiltInPressureLut
 import dev.akiskev.decentebar.model.ControllerState
 import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.ExitMode
+import dev.akiskev.decentebar.model.FeedForwardConfig
 import dev.akiskev.decentebar.model.LutValidationResult
 import dev.akiskev.decentebar.model.PressureLut
 import dev.akiskev.decentebar.model.ProfileValidator
@@ -52,13 +54,22 @@ class ShotController(
     private var stageStartMs: Long? = null
     private var stageEntryPressureBar: Double? = null
     private var lastValidWeightMs: Long? = null
+    // When ARMED, the first time we saw Stop visible while the pressure bar was not yet in
+    // the tree (post-Start "Loading…" overlay). Used to time out the wait for controls.
+    private var armedStopSeenMs: Long? = null
     private var stopSent = false
     private var manualSkipRequested = false
     private var firstDropConsecutiveReadings = 0
     private var firstDropDetected = false
     private var flowCapWarningLoggedForCurrentStage = false
+    private var controlLawLoggedForCurrentStage = false
     private var lastFlowCorrectionMs: Long? = null
     private var lastCorrectionFlowGps: Double? = null
+
+    // Resistance feed-forward controller for FLOW_LIMITED_PRESSURE stages that opt in via
+    // ProfileStage.feedForward (docs/puck-resistance-feedforward.md §5). The legacy
+    // incremental-P law stays the default; this runs only when a stage supplies the config.
+    private val flowFeedForward = FlowFeedForwardController()
 
     // Stall detection for the pressure slider: the target Y of the last issued slide and
     // the live reading just before it, used to notice when re-sliding to an unreachable
@@ -191,15 +202,31 @@ class ShotController(
 
     private fun handleArmedSnapshot(snapshot: EbarSnapshot, nowMs: Long) {
         if (!snapshot.isForeground) {
+            armedStopSeenMs = null
             state.update { it.copy(safetyStatus = "Armed; waiting for E-Bar foreground") }
             return
         }
 
         if (snapshot.hasStop) {
-            beginRunning(nowMs, snapshot)
+            // Stop is visible, so the shot has started. But after an e-bar/OS update the
+            // press of Start can pop a transient "Loading…" overlay for a second or two,
+            // during which the pressure bar isn't in the accessibility tree yet. Running
+            // the first stage then commands pressure into a slider that doesn't exist —
+            // the swipe is a no-op and preinfusion stays at 0 bar (what a manual dummy
+            // wait stage used to work around). Hold in ARMED until the bar is actually
+            // present, with a timeout so an unrecognised layout still starts rather than
+            // hanging here forever.
+            val firstSeen = armedStopSeenMs ?: nowMs.also { armedStopSeenMs = it }
+            val waitedTooLong = nowMs - firstSeen >= PRESSURE_CONTROLS_WAIT_TIMEOUT_MS
+            if (pressureControlsReady(snapshot) || waitedTooLong) {
+                beginRunning(nowMs, snapshot)
+            } else {
+                state.update { it.copy(safetyStatus = "Shot starting; waiting for pressure controls…") }
+            }
             return
         }
 
+        armedStopSeenMs = null
         if (!snapshot.hasStart) {
             fail("Neither Start nor Stop is visible while armed", attemptStop = false)
         } else {
@@ -207,11 +234,26 @@ class ShotController(
         }
     }
 
+    /**
+     * True once the live pressure bar is present in the accessibility tree, i.e. a pressure
+     * command can actually take effect. Gates the RUNNING transition so the first stage
+     * isn't run blind while a post-Start "Loading…" overlay is still covering the slider.
+     */
+    private fun pressureControlsReady(snapshot: EbarSnapshot): Boolean {
+        return BuiltInPressureLut.findPressureBar(
+            snapshot.nodes,
+            snapshot.screenWidth,
+            snapshot.screenHeight
+        ) != null
+    }
+
     private fun beginRunning(nowMs: Long, snapshot: EbarSnapshot) {
+        armedStopSeenMs = null
         shotStartMs = nowMs
         stageStartMs = nowMs
         lastValidWeightMs = snapshot.weightG?.let { nowMs }
         flowEstimator.reset()
+        flowFeedForward.reset()
         lutManager.resetThrottle()
         lastSlideTargetBar = null
         lastSlideActualBar = null
@@ -425,6 +467,21 @@ class ShotController(
         val cap = min(stage.pressureCapBar ?: safetyConfig.maxPressureBar, safetyConfig.maxPressureBar)
         val currentPressure = current.commandedPressureBar ?: min(cap, stageEntryPressureBar ?: cap)
 
+        // Record which control law drove this stage, once per stage entry, so logs are
+        // self-identifying (the analysis tool reads this instead of fingerprinting cadence).
+        if (!controlLawLoggedForCurrentStage) {
+            controlLawLoggedForCurrentStage = true
+            val law = if (stage.feedForward != null) "feed-forward control" else "incremental-P control"
+            recordEvent(ShotEventType.INFO, "$stageName: $law")
+        }
+
+        // Opt-in resistance feed-forward law (docs/puck-resistance-feedforward.md §5). When a
+        // stage supplies a FeedForwardConfig it replaces the legacy incremental-P law below.
+        stage.feedForward?.let { ffConfig ->
+            runFeedForwardStage(nowMs, flow, target, cap, currentPressure, ffConfig, stageName)
+            return
+        }
+
         // Auto-tune: with BLE scale the control loop runs much faster, so use a shorter
         // correction interval and a proportionally smaller step to keep the max rate of
         // pressure change constant (bar/s) regardless of interval.
@@ -488,6 +545,51 @@ class ShotController(
         }
     }
 
+    /**
+     * Resistance feed-forward law for stages that opt in via [ProfileStage.feedForward]
+     * (docs/puck-resistance-feedforward.md §5). The control maths lives in the pure
+     * [FlowFeedForwardController]; this only feeds it live readings, commands the result, and
+     * records the one-shot cap / channel diagnostics.
+     */
+    private fun runFeedForwardStage(
+        nowMs: Long,
+        flow: Double,
+        target: Double,
+        cap: Double,
+        currentPressure: Double,
+        config: FeedForwardConfig,
+        stageName: String
+    ) {
+        val current = state.value
+        val nextPressure = flowFeedForward.tick(nowMs, flow, target, currentPressure, cap, config)
+            ?: return  // control interval not elapsed — hold the current command
+
+        if (nextPressure != currentPressure || current.commandedPressureBar == null) {
+            commandPressure(nextPressure, nowMs, source = stageName)
+        }
+
+        if (!flowCapWarningLoggedForCurrentStage) {
+            val capLimited = nextPressure >= cap && flow < target - config.overspeedBandGps
+            val channeling = flowFeedForward.lastMode == FlowFeedForwardController.Mode.OVERSPEED_TIMEOUT
+            when {
+                capLimited -> {
+                    flowCapWarningLoggedForCurrentStage = true
+                    recordEvent(
+                        ShotEventType.INFO,
+                        "$stageName: flow ${flow.fmt(2)} g/s below target ${target.fmt(2)} g/s — pressure capped at ${cap.fmt(2)} bar"
+                    )
+                }
+                channeling -> {
+                    flowCapWarningLoggedForCurrentStage = true
+                    recordEvent(
+                        ShotEventType.INFO,
+                        "$stageName: flow ${flow.fmt(2)} g/s won't settle at low pressure — puck likely channeling"
+                    )
+                }
+            }
+        }
+    }
+
     private fun exitReason(nowMs: Long, weight: Double, flow: Double, safetyTimeout: Boolean): String? {
         val current = state.value
         val stage = current.selectedProfile.stages.getOrNull(current.currentStageIndex) ?: return null
@@ -525,6 +627,7 @@ class ShotController(
         val nextIndex = current.currentStageIndex + 1
 
         flowCapWarningLoggedForCurrentStage = false
+        controlLawLoggedForCurrentStage = false
         lastFlowCorrectionMs = null
         lastCorrectionFlowGps = null
         recordEvent(
@@ -774,14 +877,17 @@ class ShotController(
         stageStartMs = null
         stageEntryPressureBar = null
         lastValidWeightMs = null
+        armedStopSeenMs = null
         stopSent = false
         manualSkipRequested = false
         firstDropConsecutiveReadings = 0
         firstDropDetected = false
         flowCapWarningLoggedForCurrentStage = false
+        controlLawLoggedForCurrentStage = false
         lastFlowCorrectionMs = null
         lastCorrectionFlowGps = null
         flowEstimator.reset()
+        flowFeedForward.reset()
         lutManager.resetThrottle()
     }
 
@@ -879,6 +985,12 @@ class ShotController(
         // A fraction of the bar's span (resolution-independent) with an absolute floor.
         private const val SWIPE_TRAVEL_FRACTION = 0.11f
         private const val MIN_SWIPE_TRAVEL_PX = 60f
+
+        // After Start, hold the RUNNING transition until the pressure bar appears in the
+        // tree (a post-Start "Loading…" overlay can hide it for a second or two). Begin
+        // anyway after this long so an unrecognised layout — where the bar is never
+        // matched — still starts instead of stranding the user armed.
+        private const val PRESSURE_CONTROLS_WAIT_TIMEOUT_MS = 5_000L
 
         // Stall detection: a re-slide that changes the reading by less than this is "no
         // movement"; only give up (hold) when the bar is already within this band of the

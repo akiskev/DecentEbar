@@ -50,6 +50,9 @@ data class ProfileStage(
     val pressureStepBar: Double? = null,
     val correctionIntervalMs: Long? = null,
     val pressureStepMultiplierMax: Double? = null,
+    // When present on a FLOW_LIMITED_PRESSURE stage, selects the resistance feed-forward
+    // controller instead of the legacy incremental-P law (docs/puck-resistance-feedforward.md §5).
+    val feedForward: FeedForwardConfig? = null,
     val rampStartPressureBar: Double? = null,
     val rampEndPressureBar: Double? = null,
     val rampStartWeightG: Double? = null,
@@ -92,6 +95,45 @@ data class StageSafety(
     val requireTwoConsecutiveFirstDropReadings: Boolean = false
 )
 
+/**
+ * Config for the resistance feed-forward Main controller
+ * (docs/puck-resistance-feedforward.md §5). Its presence on a FLOW_LIMITED_PRESSURE stage
+ * selects the feed-forward law over the legacy incremental-P law, so it can be A/B'd per
+ * profile. Every field defaults to a sane value, so opting in is just
+ * `feedForward = FeedForwardConfig()`.
+ */
+@Serializable
+data class FeedForwardConfig(
+    // Control tick spaced to the puck's response lag so corrections don't stack (§5.4).
+    val controlIntervalMs: Long = 700L,
+    // Cold-start puck resistance (bar per g/s) when no probe seed is supplied. Phase 1 is
+    // online-only; the probe seed is Phase 2. Online adaptation corrects this within a few ticks.
+    val coldStartResistanceBarPerGps: Double = 3.0,
+    val seedResistanceBarPerGps: Double? = null,
+    // Online resistance estimate is clamped to this sane range.
+    val minResistanceBarPerGps: Double = 0.5,
+    val maxResistanceBarPerGps: Double = 12.0,
+    // Asymmetric adaptation (§5.3): trust a resistance DROP fast (channel risk), a RISE slowly.
+    val adaptDownRate: Double = 0.4,
+    val adaptUpRate: Double = 0.1,
+    // Learn only from settled samples (§5.2): accept a P/Q sample when |dflow/dt| is at or
+    // below this (g/s per second).
+    val stableMaxFlowSlopeGpsPerS: Double = 0.6,
+    // Small bounded feedback trim on the (optionally dead-time-predicted) flow error.
+    val trimGainBarPerGps: Double = 0.8,
+    val predictHorizonS: Double = 0.0,
+    // Overspeed (§5.7): flow above target + band triggers a low-pressure hold. Sized for a real
+    // gush, not a mild overshoot — small overshoots are handled by normal tracking with the floor
+    // lifted, so we don't slam to 0 (and re-trigger a limit cycle) over a few tenths g/s.
+    val overspeedBandGps: Double = 1.0,
+    val recoveryPressureBar: Double = 0.0,
+    val overspeedHoldTimeoutMs: Long = 4_000L,
+    // Conditional floor (§5.8): a floor in normal control, lifted toward 0 when flow is over target.
+    val pressureFloorBar: Double = 2.0,
+    // Rises are capped per tick (drops are not) — the asymmetry that stops re-triggering breakthroughs.
+    val maxRisePerTickBar: Double = 0.8
+)
+
 @Serializable
 data class ShotSample(
     val timeMs: Long,
@@ -118,7 +160,19 @@ data class ShotLog(
     val stoppedAtMs: Long?,
     val samples: List<ShotSample>,
     val events: List<ShotEvent>,
-    val stageTargetFlows: Map<String, Double> = emptyMap()
+    val stageTargetFlows: Map<String, Double> = emptyMap(),
+    // User-entered shot metadata (collected on save) so logs are richer for analysis.
+    val beansName: String? = null,
+    val grindSetting: String? = null,
+    val doseG: Double? = null,
+    val notes: String? = null,
+    // Auto-captured context for reproducibility (docs/puck-resistance-feedforward.md Tier 1).
+    val appVersion: String? = null,
+    val flowSource: String? = null,        // "scale" (BLE) or "accessibility" (estimated)
+    val scaleBatteryPercent: Int? = null,
+    // Full profile snapshot — captures the exact stage params and any FeedForwardConfig used,
+    // so a shot is fully reproducible (profileName above is kept for convenience).
+    val profile: ShotProfile? = null
 )
 
 @Serializable

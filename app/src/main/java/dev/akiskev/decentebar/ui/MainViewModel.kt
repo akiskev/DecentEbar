@@ -34,6 +34,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 
+/** User-entered shot metadata collected by the save dialog. */
+data class ShotMetadata(
+    val beansName: String,
+    val grindSetting: String,
+    val doseG: Double?,
+    val notes: String
+)
+
 /**
  * Owns the screen state and wiring. The shot state machine lives in [ShotController]; this class
  * forwards accessibility snapshots and scale readings to it, and handles everything around the
@@ -128,21 +136,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         currentShotLogJson()
     }
 
-    fun currentShotLog(): ShotLog? {
+    fun currentShotLog(metadata: ShotMetadata? = null): ShotLog? {
         val state = _uiState.value
         if (state.samples.isEmpty() && state.events.isEmpty()) return null
         val targetFlows = state.selectedProfile.stages
             .mapNotNull { stage -> stage.targetFlowGps?.let { stage.name to it } }
             .toMap()
+        // Flow source: samples carry altFlowGps (the parallel software estimate) only when the
+        // BLE scale drove the loop, so it's a reliable during-shot indicator of the data source.
+        val scaleDriven = state.samples.any { it.altFlowGps != null }
         return ShotLog(
             profileName = state.selectedProfile.name,
             startedAtMs = controller.shotStartMs,
             stoppedAtMs = controller.shotStoppedMs,
             samples = state.samples,
             events = state.events,
-            stageTargetFlows = targetFlows
+            stageTargetFlows = targetFlows,
+            beansName = metadata?.beansName?.takeIf { it.isNotBlank() },
+            grindSetting = metadata?.grindSetting?.takeIf { it.isNotBlank() },
+            doseG = metadata?.doseG,
+            notes = metadata?.notes?.takeIf { it.isNotBlank() },
+            appVersion = appVersionName(),
+            flowSource = if (scaleDriven) "scale" else "accessibility",
+            scaleBatteryPercent = if (scaleDriven) state.scaleBatteryPercent else null,
+            profile = state.selectedProfile
         )
     }
+
+    private fun appVersionName(): String? = runCatching {
+        val ctx = getApplication<Application>()
+        val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        val code = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            @Suppress("DEPRECATION") info.versionCode.toLong()
+        }
+        "${info.versionName} ($code)"
+    }.getOrNull()
 
     fun currentShotLogJson(): String {
         val log = currentShotLog() ?: run {

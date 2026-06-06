@@ -13,8 +13,8 @@ android {
         applicationId = "dev.akiskev.decentebar"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.0.2.1"
+        versionCode = 3
+        versionName = "0.0.3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

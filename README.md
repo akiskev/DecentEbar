@@ -1,5 +1,7 @@
 # Decent E-Bar
 
+**Version 0.0.3.1**
+
 Android AccessibilityService controller for the Decent Espresso E-Bar — automates pressure profiling by reading live weight and flow from the E-Bar screen and commanding pressure via gesture swipes on the pressure slider, targeting a calibrated LUT. Optionally connects directly to a **Bookoo Mini scale over BLE** for ultra-fast weight and flow readings.
 
 ## Features
