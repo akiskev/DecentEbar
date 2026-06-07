@@ -220,6 +220,9 @@ const targetPlugin={
   id:'target',
   afterDatasetsDraw(chart){
     if(!hasTargets)return;
+    // Respect the legend toggle: the legend entry is a dummy dataset, so honor its visibility here.
+    const ti=chart.data.datasets.findIndex(ds=>ds.label==='Target Flow (g/s)');
+    if(ti>=0&&!chart.isDatasetVisible(ti))return;
     const{ctx,chartArea:{left,right},scales:{x,yL}}=chart;
     ctx.save();ctx.strokeStyle=TARGET_COLOR;ctx.lineWidth=2;ctx.setLineDash([8,6]);
     bands.forEach(b=>{
