@@ -13,10 +13,28 @@ class ProfileRepository(context: Context) {
     private val json = JsonCodec.json
 
     fun loadProfiles(): List<ShotProfile> {
-        val stored = prefs.getString(KEY_PROFILES, null) ?: return listOf(DefaultProfiles.flow33Dark)
-        return runCatching { json.decodeFromString<List<ShotProfile>>(stored) }
-            .getOrDefault(listOf(DefaultProfiles.flow33Dark))
-            .ifEmpty { listOf(DefaultProfiles.flow33Dark) }
+        val stored = prefs.getString(KEY_PROFILES, null)
+            ?.let { raw -> runCatching { json.decodeFromString<List<ShotProfile>>(raw) }.getOrNull() }
+            .orEmpty()
+        return seedBuiltIns(stored)
+    }
+
+    /**
+     * Ensure the bundled [DefaultProfiles.builtIns] are present. Runs once per
+     * [DefaultProfiles.BUILT_INS_VERSION] — i.e. on first load after an install or an update
+     * that changed the bundle — replacing stored profiles with the same name in place and
+     * appending the rest. Between bumps, user edits and deletions of built-ins persist.
+     */
+    private fun seedBuiltIns(stored: List<ShotProfile>): List<ShotProfile> {
+        if (stored.isNotEmpty() && prefs.getInt(KEY_BUILTINS_VERSION, 0) >= DefaultProfiles.BUILT_INS_VERSION) {
+            return stored
+        }
+        val byName = DefaultProfiles.builtIns.associateBy { it.name }
+        val merged = stored.map { byName[it.name] ?: it } +
+            DefaultProfiles.builtIns.filter { builtIn -> stored.none { it.name == builtIn.name } }
+        saveProfiles(merged)
+        prefs.edit().putInt(KEY_BUILTINS_VERSION, DefaultProfiles.BUILT_INS_VERSION).commit()
+        return merged
     }
 
     fun saveProfiles(profiles: List<ShotProfile>) {
@@ -60,6 +78,7 @@ class ProfileRepository(context: Context) {
 
     companion object {
         private const val KEY_PROFILES = "profiles_json"
+        private const val KEY_BUILTINS_VERSION = "builtins_seeded_version"
     }
 }
 

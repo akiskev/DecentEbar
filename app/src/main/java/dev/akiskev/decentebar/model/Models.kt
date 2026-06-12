@@ -58,6 +58,13 @@ data class ProfileStage(
     val rampStartWeightG: Double? = null,
     val rampEndWeightG: Double? = null,
     val rampDurationMs: Long? = null,
+    // When present on a YIELD_TIME_TRAJECTORY stage, drives the output-based planner that
+    // computes a live target flow from a desired final yield/time + flow shape, then hands
+    // that target to the existing flow→pressure controller (docs/yield-time-trajectory.md).
+    val yieldTime: YieldTimeTrajectoryConfig? = null,
+    // When present on a PRESSURE_CURVE stage, a hand-drawn multi-point pressure curve commanded
+    // directly against elapsed time or absolute cup weight.
+    val pressureCurve: PressureCurveConfig? = null,
     val exit: ExitCondition = ExitCondition(),
     val safety: StageSafety = StageSafety()
 )
@@ -68,6 +75,8 @@ enum class StageType {
     FLOW_LIMITED_PRESSURE,
     WEIGHT_BASED_PRESSURE_RAMP,
     TIME_BASED_PRESSURE_RAMP,
+    YIELD_TIME_TRAJECTORY,
+    PRESSURE_CURVE,
     STOP
 }
 
@@ -134,6 +143,127 @@ data class FeedForwardConfig(
     val maxRisePerTickBar: Double = 0.8
 )
 
+/** Flow-shape strategy for a [YieldTimeTrajectoryConfig]. */
+@Serializable
+enum class FlowCurveType {
+    FLAT,
+    DECLINING,
+    RAMP_THEN_DECLINE,
+    BLOOMING_DECLINE,
+    CUSTOM_POINTS
+}
+
+/**
+ * How hard the planner is allowed to chase the yield/time target near the end of the shot.
+ * STRICT_TARGET still corrects aggressively late; TASTE_SAFE prefers a slightly short/late
+ * shot over a violent final-seconds pressure rise (docs/yield-time-trajectory.md).
+ */
+@Serializable
+enum class TastePriorityMode {
+    STRICT_TARGET,
+    BALANCED,
+    TASTE_SAFE
+}
+
+/** One control point of a CUSTOM_POINTS flow curve: flow at a fraction of the stage duration. */
+@Serializable
+data class CurvePoint(
+    val timePct: Double,
+    val flowGps: Double
+)
+
+/**
+ * Output-driven extraction config for a [StageType.YIELD_TIME_TRAJECTORY] stage
+ * (docs/yield-time-trajectory.md). The user declares the desired final beverage weight,
+ * shot time, and a flow shape; the planner computes a live target flow (planned curve blended
+ * with a catch-up term, with late-shot taste protection) and the existing flow→pressure
+ * controller follows it under all the usual pressure-safety limits.
+ *
+ * The shape params (start/peak/end flow) describe the *shape*; the planner normalizes the
+ * curve so its integral equals [targetYieldG] regardless of those absolute values.
+ *
+ * [targetYieldG] and [targetDurationS] are measured from **first drop**, not stage entry:
+ * flow is unobservable while the scale reads ~0 g, so the recipe clock and flow control only
+ * start once the puck yields. Before that, a pressure-driven pre-infusion phase saturates the
+ * puck ([preInfusionPressureBar]). During extraction, [minExtractionPressureBar] keeps a pressure
+ * floor so the tail doesn't sag into under-extraction.
+ *
+ * [feedForward] mirrors the [ProfileStage.feedForward] convention: its presence selects the
+ * resistance feed-forward controller over the legacy incremental-P law for the flow→pressure
+ * step. Every field is defaulted so opting in from the editor or a minimal JSON is cheap.
+ */
+@Serializable
+data class YieldTimeTrajectoryConfig(
+    val targetYieldG: Double = 30.0,
+    val targetDurationS: Double = 30.0,
+    val curveType: FlowCurveType = FlowCurveType.RAMP_THEN_DECLINE,
+    // Shape hints (normalized to hit targetYieldG). For RAMP_THEN_DECLINE the curve runs
+    // start → peak (at peakAtPct) → end; DECLINING uses start → end; FLAT ignores them.
+    val startFlowGps: Double = 0.65,
+    val peakFlowGps: Double = 1.25,
+    val endFlowGps: Double = 0.75,
+    val peakAtPct: Double = 0.35,
+    // Only for CUSTOM_POINTS: interpolated then normalized to targetYieldG.
+    val customPoints: List<CurvePoint> = emptyList(),
+    // Pressure / flow envelope handed to the lower-level controller and the rate guard.
+    val maxPressureBar: Double = 8.0,
+    val minPressureBar: Double = 0.0,
+    // Extraction floor: a minimum pressure held through the *extraction* phase (after first drop)
+    // so the back of the shot keeps real extraction force instead of coasting at ~0 bar and
+    // under-extracting (the classic "sour, thin tail"). Unlike minPressureBar it does NOT raise
+    // the pre-infusion pressure, and it is released during a confirmed gush so a channeling puck
+    // can still be arrested. 0 = off (default; backward compatible).
+    val minExtractionPressureBar: Double = 0.0,
+    val maxFlowGps: Double = 1.6,
+    val minFlowGps: Double = 0.0,
+    val maxPressureRiseBarPerS: Double = 0.6,
+    val maxPressureFallBarPerS: Double = 1.0,
+    // 0 = ignore the trajectory error (follow the planned curve), 1 = fully chase the
+    // catch-up flow. Blended each tick: corrected = planned + strength*(catchup − planned).
+    val correctionStrength: Double = 0.35,
+    // Inside this many seconds of the end, correction strength is ramped down toward 0.
+    val lateShotCorrectionLimitS: Double = 5.0,
+    val tastePriorityMode: TastePriorityMode = TastePriorityMode.TASTE_SAFE,
+    // Pre-infusion (before first drop): flow is 0 until the puck yields, so the trajectory clock
+    // and flow control only begin at first drop. Until then, hold this gentle pressure to
+    // saturate the puck. preInfusionMaxS force-starts extraction if first drop never arrives, so
+    // a non-yielding puck can't pre-infuse forever.
+    val preInfusionPressureBar: Double = 3.0,
+    val preInfusionMaxS: Double = 20.0,
+    val feedForward: FeedForwardConfig? = null
+)
+
+/** What a [PressureCurveConfig] plots pressure against: elapsed stage time or absolute cup weight. */
+@Serializable
+enum class PressureCurveAxis {
+    TIME,
+    WEIGHT
+}
+
+/** One point of a hand-drawn pressure curve: pressure at a fraction of the X axis (time or weight). */
+@Serializable
+data class PressureCurvePoint(
+    val xPct: Double,
+    val pressureBar: Double
+)
+
+/**
+ * A hand-drawn multi-point pressure curve commanded directly by a [StageType.PRESSURE_CURVE] stage
+ * (no controller/feedback — pressure is the actuator). At each tick the X fraction is computed from
+ * elapsed stage time (`durationS`) or absolute cup weight (`maxWeightG`) per [axis], the pressure is
+ * interpolated from [points] (clamped to the endpoints past the range), and commanded within
+ * `[minPressureBar, maxPressureBar]`. `maxPressureBar` is both the editor's Y scale and the cap.
+ */
+@Serializable
+data class PressureCurveConfig(
+    val axis: PressureCurveAxis = PressureCurveAxis.TIME,
+    val points: List<PressureCurvePoint> = emptyList(),
+    val durationS: Double = 30.0,
+    val maxWeightG: Double = 40.0,
+    val maxPressureBar: Double = 9.0,
+    val minPressureBar: Double = 0.0
+)
+
 @Serializable
 data class ShotSample(
     val timeMs: Long,
@@ -141,7 +271,17 @@ data class ShotSample(
     val flowGps: Double,
     val commandedPressureBar: Double?,
     val stageName: String,
-    val altFlowGps: Double? = null  // software-estimated flow when scale is connected, for comparison
+    val altFlowGps: Double? = null,  // software-estimated flow when scale is connected, for comparison
+    // Yield/time trajectory telemetry — populated only on YIELD_TIME_TRAJECTORY stages, null
+    // otherwise (docs/yield-time-trajectory.md). targetWeightG is absolute (stage-entry weight
+    // + planned stage weight) so reports overlay it directly on actual cup weight.
+    val targetWeightG: Double? = null,
+    val targetFlowGps: Double? = null,
+    val correctedTargetFlowGps: Double? = null,
+    val weightErrorG: Double? = null,
+    val flowErrorGps: Double? = null,
+    val trajectoryProgressPct: Double? = null,
+    val plannerMode: String? = null
 )
 
 @Serializable
@@ -501,4 +641,192 @@ object DefaultProfiles {
             )
         )
     )
+
+    /**
+     * Output-driven example (docs/yield-time-trajectory.md): declare 30 g in 30 s on a sweet
+     * ramp-then-decline curve and let the trajectory planner compute the flow while pressure stays
+     * inside the limits. A single yield/time stage, so stage-relative yield equals the cup weight.
+     */
+    val sweet30in30 = ShotProfile(
+        name = "Sweet 30g / 30s Decline",
+        targetWeightG = 30.0,
+        stopOffsetG = 0.8,
+        // Pre-infusion (up to ~20 s) + 30 s extraction + headroom.
+        maxShotTimeMs = 60_000L,
+        stages = listOf(
+            ProfileStage(
+                name = "Extraction",
+                type = StageType.YIELD_TIME_TRAJECTORY,
+                yieldTime = YieldTimeTrajectoryConfig(
+                    targetYieldG = 30.0,
+                    targetDurationS = 30.0,
+                    curveType = FlowCurveType.RAMP_THEN_DECLINE,
+                    startFlowGps = 0.65,
+                    peakFlowGps = 1.25,
+                    endFlowGps = 0.75,
+                    peakAtPct = 0.35,
+                    maxPressureBar = 8.0,
+                    maxFlowGps = 1.6,
+                    maxPressureRiseBarPerS = 0.6,
+                    maxPressureFallBarPerS = 1.0,
+                    correctionStrength = 0.35,
+                    lateShotCorrectionLimitS = 5.0,
+                    tastePriorityMode = TastePriorityMode.TASTE_SAFE,
+                    preInfusionPressureBar = 3.0,
+                    preInfusionMaxS = 20.0,
+                    minExtractionPressureBar = 2.5
+                ),
+                // Time completion is the trajectory's own (post first-drop) duration, handled by the
+                // controller — NOT stage time, which includes pre-infusion. Weight target + the
+                // global stop end the shot; the stage cap backstops a stuck puck.
+                exit = ExitCondition(weightGte = 30.0),
+                safety = StageSafety(maxStageTimeMs = 55_000L, requireTwoConsecutiveFirstDropReadings = true)
+            )
+        )
+    )
+
+    /**
+     * Dialed-in light-medium recipe (IMS 15 g basket, 15.5 g dose → 45 g), tuned from tasted
+     * shots: output-driven 45 g in 30 s on a ramp-then-decline flow curve with a late peak,
+     * a 3.5 bar extraction floor, and the resistance feed-forward controller.
+     */
+    val ims15LightMedium = ShotProfile(
+        name = "IMS15 Light-Medium · 15.5g→45g / 30s",
+        targetWeightG = 46.0,
+        stopOffsetG = 1.0,
+        maxShotTimeMs = 60_000L,
+        stages = listOf(
+            ProfileStage(
+                name = "Extraction",
+                type = StageType.YIELD_TIME_TRAJECTORY,
+                yieldTime = YieldTimeTrajectoryConfig(
+                    targetYieldG = 45.0,
+                    targetDurationS = 30.0,
+                    curveType = FlowCurveType.RAMP_THEN_DECLINE,
+                    startFlowGps = 0.6,
+                    peakFlowGps = 1.15,
+                    endFlowGps = 0.95,
+                    peakAtPct = 0.4,
+                    maxPressureBar = 9.0,
+                    minExtractionPressureBar = 3.5,
+                    maxFlowGps = 2.0,
+                    maxPressureRiseBarPerS = 2.1,
+                    maxPressureFallBarPerS = 1.0,
+                    correctionStrength = 0.4,
+                    lateShotCorrectionLimitS = 5.0,
+                    tastePriorityMode = TastePriorityMode.BALANCED,
+                    preInfusionPressureBar = 3.0,
+                    preInfusionMaxS = 20.0,
+                    feedForward = FeedForwardConfig()
+                ),
+                exit = ExitCondition(weightGte = 46.0),
+                safety = StageSafety(maxStageTimeMs = 60_000L, requireTwoConsecutiveFirstDropReadings = true)
+            )
+        )
+    )
+
+    /**
+     * Lever-style pressure-vs-weight curve for light-medium (15.5 g → 45 g): 6.7 bar at 0 g
+     * (held through pre-infusion while the scale still reads ~0), peak 8 bar at 10 g in the cup,
+     * then a linear decline to 5 bar at 45 g. The weight axis means a slow puck spends longer at
+     * each pressure instead of racing a clock.
+     */
+    val ims15PressureWeight = ShotProfile(
+        name = "IMS15 LM Pressure/Weight 6.7→8→5 · 45g",
+        targetWeightG = 46.0,
+        stopOffsetG = 1.0,
+        maxShotTimeMs = 60_000L,
+        stages = listOf(
+            ProfileStage(
+                name = "Lever Curve",
+                type = StageType.PRESSURE_CURVE,
+                pressureCurve = PressureCurveConfig(
+                    axis = PressureCurveAxis.WEIGHT,
+                    points = listOf(
+                        PressureCurvePoint(0.0, 6.7),
+                        PressureCurvePoint(0.2222, 8.0),
+                        PressureCurvePoint(1.0, 5.0)
+                    ),
+                    maxWeightG = 45.0,
+                    maxPressureBar = 9.0
+                ),
+                exit = ExitCondition(weightGte = 46.0),
+                safety = StageSafety(maxStageTimeMs = 60_000L, requireTwoConsecutiveFirstDropReadings = true)
+            )
+        )
+    )
+
+    /**
+     * "Maximum taste" light-medium build (15.5 g → 45 g): slow-ramp wetting (no compaction
+     * shock or fines migration), a blooming pause so the puck swells and seals micro-channels,
+     * then a taste-safe declining yield/time extraction with an anti-sour pressure floor.
+     */
+    val ims15Ultimate = ShotProfile(
+        name = "IMS15 LM Ultimate · 15.5g→45g",
+        targetWeightG = 46.0,
+        stopOffsetG = 1.0,
+        maxShotTimeMs = 70_000L,
+        stages = listOf(
+            ProfileStage(
+                name = "Gentle Wet",
+                type = StageType.TIME_BASED_PRESSURE_RAMP,
+                rampStartPressureBar = 1.2,
+                rampEndPressureBar = 3.2,
+                rampDurationMs = 8_000L,
+                exit = ExitCondition(stageTimeGteMs = 16_000L, firstDropDetected = true),
+                safety = StageSafety(maxStageTimeMs = 20_000L, requireTwoConsecutiveFirstDropReadings = true)
+            ),
+            ProfileStage(
+                name = "Bloom",
+                type = StageType.FIXED_PRESSURE,
+                fixedPressureBar = 1.8,
+                exit = ExitCondition(stageTimeGteMs = 6_000L, weightGte = 5.0),
+                safety = StageSafety(maxStageTimeMs = 10_000L)
+            ),
+            ProfileStage(
+                name = "Sweet Decline",
+                type = StageType.YIELD_TIME_TRAJECTORY,
+                yieldTime = YieldTimeTrajectoryConfig(
+                    targetYieldG = 40.0,
+                    targetDurationS = 27.0,
+                    curveType = FlowCurveType.RAMP_THEN_DECLINE,
+                    startFlowGps = 0.65,
+                    peakFlowGps = 1.3,
+                    endFlowGps = 0.9,
+                    peakAtPct = 0.35,
+                    maxPressureBar = 9.0,
+                    minExtractionPressureBar = 3.5,
+                    maxFlowGps = 2.0,
+                    maxPressureRiseBarPerS = 2.1,
+                    maxPressureFallBarPerS = 1.0,
+                    correctionStrength = 0.35,
+                    lateShotCorrectionLimitS = 5.0,
+                    tastePriorityMode = TastePriorityMode.TASTE_SAFE,
+                    // Fallback only: first drop normally fires during Gentle Wet, which skips
+                    // this stage's internal pre-infusion entirely.
+                    preInfusionPressureBar = 3.2,
+                    preInfusionMaxS = 10.0,
+                    feedForward = FeedForwardConfig()
+                ),
+                exit = ExitCondition(weightGte = 46.0),
+                safety = StageSafety(maxStageTimeMs = 45_000L, requireTwoConsecutiveFirstDropReadings = true)
+            )
+        )
+    )
+
+    /** Profiles bundled with the app; (re-)seeded by ProfileRepository on install/update. */
+    val builtIns: List<ShotProfile> = listOf(
+        flow33Dark,
+        sweet30in30,
+        ims15LightMedium,
+        ims15PressureWeight,
+        ims15Ultimate
+    )
+
+    /**
+     * Bump whenever [builtIns] changes: installs whose stored seed version is older re-seed on
+     * next load, overwriting same-name profiles with the bundled versions (user profiles under
+     * other names are untouched).
+     */
+    const val BUILT_INS_VERSION = 2
 }

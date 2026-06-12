@@ -4,16 +4,21 @@ import android.util.Log
 import dev.akiskev.decentebar.accessibility.EbarAccessibilityService
 import dev.akiskev.decentebar.ble.ScaleConnectionState
 import dev.akiskev.decentebar.ble.ScaleReading
+import dev.akiskev.decentebar.engine.CurveMath
 import dev.akiskev.decentebar.engine.FlowEstimator
 import dev.akiskev.decentebar.engine.FlowFeedForwardController
 import dev.akiskev.decentebar.engine.PressureLutManager
+import dev.akiskev.decentebar.engine.YieldTimeTrajectoryPlanner
 import dev.akiskev.decentebar.model.BuiltInPressureLut
 import dev.akiskev.decentebar.model.ControllerState
+import dev.akiskev.decentebar.model.CurvePoint
 import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.ExitMode
+import dev.akiskev.decentebar.model.PressureCurveAxis
 import dev.akiskev.decentebar.model.FeedForwardConfig
 import dev.akiskev.decentebar.model.LutValidationResult
 import dev.akiskev.decentebar.model.PressureLut
+import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.ProfileValidator
 import dev.akiskev.decentebar.model.SafetyConfig
 import dev.akiskev.decentebar.model.ScreenSpec
@@ -21,6 +26,7 @@ import dev.akiskev.decentebar.model.ShotEvent
 import dev.akiskev.decentebar.model.ShotEventType
 import dev.akiskev.decentebar.model.ShotSample
 import dev.akiskev.decentebar.model.StageType
+import dev.akiskev.decentebar.model.YieldTimeTrajectoryConfig
 import dev.akiskev.decentebar.util.formatDecimals
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -53,6 +59,23 @@ class ShotController(
 
     private var stageStartMs: Long? = null
     private var stageEntryPressureBar: Double? = null
+    // Weight at the moment the current stage began, so a YIELD_TIME_TRAJECTORY stage measures
+    // yield relative to its own start (stays correct after a preinfusion stage).
+    private var stageEntryWeightG: Double? = null
+    // Last time the yield/time stage issued an accepted pressure command — basis for the
+    // per-second pressure rise/fall rate envelope.
+    private var lastYieldCommandMs: Long? = null
+    // Gush detection state for the yield/time fall-clamp bypass: the flow at the previous control
+    // tick (for the "rising" test) and how many consecutive ticks have met the gush criteria.
+    private var prevYieldFlowGps: Double? = null
+    private var gushConfirmTicks = 0
+    private var gushBypassLoggedForCurrentStage = false
+    // Yield/time first-drop anchor: the recipe clock and yield count start at first drop (flow is
+    // unobservable while the scale reads ~0 g), so these latch the time/weight at the moment the
+    // stage leaves pre-infusion. Null while still pre-infusing.
+    private var yieldExtractionStartMs: Long? = null
+    private var yieldExtractionStartWeightG: Double? = null
+    private var yieldPreInfusionLogged = false
     private var lastValidWeightMs: Long? = null
     // When ARMED, the first time we saw Stop visible while the pressure bar was not yet in
     // the tree (post-Start "Loading…" overlay). Used to time out the wait for controls.
@@ -70,6 +93,11 @@ class ShotController(
     // ProfileStage.feedForward (docs/puck-resistance-feedforward.md §5). The legacy
     // incremental-P law stays the default; this runs only when a stage supplies the config.
     private val flowFeedForward = FlowFeedForwardController()
+
+    // Output-based trajectory planner for YIELD_TIME_TRAJECTORY stages
+    // (docs/yield-time-trajectory.md). Configured on stage entry; it only emits a target flow,
+    // which is then handed to the flow→pressure controller below.
+    private val yieldPlanner = YieldTimeTrajectoryPlanner()
 
     // Stall detection for the pressure slider: the target Y of the last issued slide and
     // the live reading just before it, used to notice when re-sliding to an unreachable
@@ -251,9 +279,19 @@ class ShotController(
         armedStopSeenMs = null
         shotStartMs = nowMs
         stageStartMs = nowMs
+        stageEntryWeightG = snapshot.weightG ?: 0.0
+        lastYieldCommandMs = null
+        prevYieldFlowGps = null
+        gushConfirmTicks = 0
+        gushBypassLoggedForCurrentStage = false
+        yieldExtractionStartMs = null
+        yieldExtractionStartWeightG = null
+        yieldPreInfusionLogged = false
         lastValidWeightMs = snapshot.weightG?.let { nowMs }
         flowEstimator.reset()
         flowFeedForward.reset()
+        yieldPlanner.reset()
+        configurePlannerForStage(state.value.selectedProfile.stages.firstOrNull())
         lutManager.resetThrottle()
         lastSlideTargetBar = null
         lastSlideActualBar = null
@@ -435,6 +473,8 @@ class ShotController(
                 commandPressure(lerp(start, end, progress), nowMs, source = stage.name)
             }
             StageType.FLOW_LIMITED_PRESSURE -> runFlowLimitedStage(nowMs, flow, stage.name)
+            StageType.YIELD_TIME_TRAJECTORY -> runYieldTimeTrajectoryStage(nowMs, weight, flow, stage)
+            StageType.PRESSURE_CURVE -> runPressureCurveStage(nowMs, weight, stage)
             StageType.WEIGHT_BASED_PRESSURE_RAMP -> {
                 val startWeight = stage.rampStartWeightG ?: weight
                 val endWeight = stage.rampEndWeightG ?: startWeight
@@ -497,27 +537,10 @@ class ShotController(
         val dueForCorrection = lastCorrection == null || (nowMs - lastCorrection) >= intervalMs
 
         if (dueForCorrection) {
-            val error = flow - target
-            val absError = abs(error)
-
-            // Derivative guard: if the previous correction is already moving flow toward the
-            // target, reduce the multiplier to 30% to avoid stacking corrections faster than
-            // the system can respond (dead-time over-correction).
-            val lastFlow = lastCorrectionFlowGps
-            val movingTowardTarget = when {
-                error > deadband -> lastFlow != null && flow < lastFlow
-                error < -deadband -> lastFlow != null && flow > lastFlow
-                else -> false
-            }
-            val rawMultiplier = if (absError > deadband) (absError / deadband).coerceAtMost(maxMult) else 0.0
-            val multiplier = if (movingTowardTarget) rawMultiplier * 0.3 else rawMultiplier
-            val scaledStep = step * multiplier
-
-            val nextPressure = when {
-                flow > target + deadband -> currentPressure - scaledStep
-                flow < target - deadband -> currentPressure + scaledStep
-                else -> currentPressure
-            }.coerceIn(safetyConfig.minPressureBar, cap)
+            val nextPressure = incrementalPNextPressure(
+                flow, target, currentPressure, step, deadband, maxMult,
+                minP = safetyConfig.minPressureBar, cap = cap
+            )
 
             if (nextPressure != currentPressure || current.commandedPressureBar == null) {
                 // Only advance the correction timer when the LUT actually accepts the command.
@@ -590,6 +613,250 @@ class ShotController(
         }
     }
 
+    /**
+     * Incremental-P flow-tracking step (shared by [runFlowLimitedStage] and the yield/time
+     * stage): nudge pressure up/down by a deadband-scaled step toward [target] flow, with a
+     * derivative guard that damps the step when flow is already moving the right way. Pure given
+     * the live readings and [lastCorrectionFlowGps]; the caller owns the interval gate, the
+     * command, and the timer bookkeeping.
+     */
+    private fun incrementalPNextPressure(
+        flow: Double,
+        target: Double,
+        currentPressure: Double,
+        step: Double,
+        deadband: Double,
+        maxMult: Double,
+        minP: Double,
+        cap: Double
+    ): Double {
+        val error = flow - target
+        val absError = abs(error)
+        // Derivative guard: if the previous correction is already moving flow toward the target,
+        // reduce the multiplier to 30% to avoid stacking corrections faster than the system can
+        // respond (dead-time over-correction).
+        val lastFlow = lastCorrectionFlowGps
+        val movingTowardTarget = when {
+            error > deadband -> lastFlow != null && flow < lastFlow
+            error < -deadband -> lastFlow != null && flow > lastFlow
+            else -> false
+        }
+        val rawMultiplier = if (absError > deadband) (absError / deadband).coerceAtMost(maxMult) else 0.0
+        val multiplier = if (movingTowardTarget) rawMultiplier * 0.3 else rawMultiplier
+        val scaledStep = step * multiplier
+        return when {
+            flow > target + deadband -> currentPressure - scaledStep
+            flow < target - deadband -> currentPressure + scaledStep
+            else -> currentPressure
+        }.coerceIn(minP, cap)
+    }
+
+    /** Configure the trajectory planner when entering a YIELD_TIME_TRAJECTORY stage. */
+    private fun configurePlannerForStage(stage: ProfileStage?) {
+        if (stage?.type == StageType.YIELD_TIME_TRAJECTORY) {
+            stage.yieldTime?.let { yieldPlanner.configure(it) }
+        }
+    }
+
+    /**
+     * Hand-drawn pressure curve commanded directly (no feedback): interpolate the drawn pressure at
+     * the current X fraction — elapsed stage time, or absolute cup weight — and command it within
+     * the stage's pressure limits. Mirrors [StageType.TIME_BASED_PRESSURE_RAMP]; the LUT throttle and
+     * the slider's physical response smooth steep steps.
+     */
+    private fun runPressureCurveStage(nowMs: Long, weight: Double, stage: ProfileStage) {
+        val cfg = stage.pressureCurve ?: return
+        val cap = min(cfg.maxPressureBar, safetyConfig.maxPressureBar)
+        val minP = max(cfg.minPressureBar, safetyConfig.minPressureBar)
+
+        if (!controlLawLoggedForCurrentStage) {
+            controlLawLoggedForCurrentStage = true
+            recordEvent(
+                ShotEventType.INFO,
+                "${stage.name}: pressure curve vs ${cfg.axis.name.lowercase()} (${cfg.points.size} points)"
+            )
+        }
+
+        val x = when (cfg.axis) {
+            PressureCurveAxis.TIME ->
+                ((nowMs - (stageStartMs ?: nowMs)) / 1000.0) / cfg.durationS.coerceAtLeast(0.5)
+            PressureCurveAxis.WEIGHT ->
+                weight / cfg.maxWeightG.coerceAtLeast(0.5)   // absolute cup weight
+        }.coerceIn(0.0, 1.0)
+
+        val knots = cfg.points.map { CurvePoint(it.xPct, it.pressureBar) }
+        val target = CurveMath.flowAtPct(knots, x).coerceIn(minP, cap)
+        commandPressure(target, nowMs, source = stage.name)
+    }
+
+    /**
+     * Output-driven extraction stage (docs/yield-time-trajectory.md). The pure [yieldPlanner]
+     * turns the desired yield/time + flow shape into a corrected target flow; that target is
+     * handed to the selected flow→pressure controller (resistance feed-forward when the config
+     * supplies one, else the shared incremental-P law), and the resulting pressure is clamped to
+     * the stage's per-second rise/fall envelope before being commanded. The planner never
+     * bypasses the pressure-safety layer — it only produces a target flow.
+     */
+    private fun runYieldTimeTrajectoryStage(nowMs: Long, weight: Double, flow: Double, stage: ProfileStage) {
+        val cfg = stage.yieldTime ?: return
+        val current = state.value
+        val stageName = stage.name
+        val cap = min(cfg.maxPressureBar, safetyConfig.maxPressureBar)
+        val minP = max(cfg.minPressureBar, safetyConfig.minPressureBar)
+
+        // Phase 1 — pre-infusion (before first drop). Flow is unobservable while the scale reads
+        // ~0 g, so hold a gentle pressure to saturate the puck; the recipe clock and flow control
+        // do not run yet. If first drop already happened (e.g. an upstream pre-infusion stage),
+        // this is skipped and extraction begins immediately.
+        if (yieldExtractionStartMs == null) {
+            val stageElapsedMs = nowMs - (stageStartMs ?: nowMs)
+            val timedOut = cfg.preInfusionMaxS > 0.0 && stageElapsedMs >= (cfg.preInfusionMaxS * 1000).toLong()
+            if (!firstDropDetected && !timedOut) {
+                if (!yieldPreInfusionLogged) {
+                    yieldPreInfusionLogged = true
+                    recordEvent(
+                        ShotEventType.INFO,
+                        "$stageName: pre-infusion at ${cfg.preInfusionPressureBar.fmt(1)} bar until first drop"
+                    )
+                }
+                commandPressure(cfg.preInfusionPressureBar.coerceIn(minP, cap), nowMs, source = stageName)
+                return
+            }
+            // Latch the trajectory anchor at first drop (or pre-infusion timeout). The recipe's
+            // 30 g / 30 s is measured from here, and the controller hands off from the pre-infusion
+            // pressure. Reset the rate/gush clocks so extraction starts with a clean envelope.
+            yieldExtractionStartMs = nowMs
+            yieldExtractionStartWeightG = weight
+            lastYieldCommandMs = null
+            prevYieldFlowGps = null
+            gushConfirmTicks = 0
+            val law = if (cfg.feedForward != null) "feed-forward control" else "incremental-P control"
+            val trigger = if (firstDropDetected) "first drop at ${weight.fmt(1)}g" else "pre-infusion timeout"
+            recordEvent(
+                ShotEventType.INFO,
+                "$stageName: extraction begins ($trigger) — ${cfg.targetYieldG.fmt(1)}g / ${cfg.targetDurationS.fmt(1)}s, " +
+                    "${cfg.curveType.name.lowercase().replace('_', ' ')} curve ($law)"
+            )
+        }
+
+        // Phase 2 — extraction. The trajectory clocks from first drop and yield is counted from
+        // the first-drop weight, so the pre-infusion dead time isn't charged against the recipe.
+        val currentPressure = current.commandedPressureBar ?: min(cap, stageEntryPressureBar ?: cap)
+        val extractionElapsedMs = nowMs - (yieldExtractionStartMs ?: nowMs)
+        val yieldGained = (weight - (yieldExtractionStartWeightG ?: weight)).coerceAtLeast(0.0)
+        val tick = yieldPlanner.evaluate(extractionElapsedMs, yieldGained)
+        val targetFlow = tick.correctedTargetFlowGps
+
+        // Ask the selected lower-level controller for a proposed pressure to hit targetFlow.
+        // Both paths self-gate on their own interval and return null to mean "hold".
+        val proposed: Double = if (cfg.feedForward != null) {
+            flowFeedForward.tick(nowMs, flow, targetFlow, currentPressure, cap, cfg.feedForward) ?: return
+        } else {
+            val scaleOn = current.scaleConnectionState == ScaleConnectionState.CONNECTED
+            val intervalMs = if (scaleOn) 250L else 600L
+            val lastCorrection = lastFlowCorrectionMs
+            if (lastCorrection != null && nowMs - lastCorrection < intervalMs) return  // not due — hold
+            val stepBar = 0.6 * (intervalMs.toDouble() / 600.0)
+            incrementalPNextPressure(flow, targetFlow, currentPressure, stepBar, INCREMENTAL_DEADBAND_GPS, 8.0, minP, cap)
+        }
+
+        // Authoritative per-second pressure rate envelope (applied uniformly regardless of the
+        // controller chosen). The fall clamp is bypassed only during a *confirmed* gush so pressure
+        // can be dumped fast — preserving gusher safety without letting a single high-flow tick
+        // trigger an aggressive (and self-oscillating) pressure drop.
+        val gushing = detectGush(flow, targetFlow, tick.weightErrorG, stageName)
+        // Extraction floor: hold a minimum pressure through extraction so the tail keeps real
+        // extraction force (anti-sour), but release it during a confirmed gush so a channeling puck
+        // can still be arrested down to the hard minPressureBar.
+        val floor = if (gushing) minP else max(minP, cfg.minExtractionPressureBar).coerceAtMost(cap)
+        val finalPressure = applyPressureRateEnvelope(proposed, currentPressure, nowMs, bypassFallClamp = gushing, cfg)
+            .coerceIn(floor, cap)
+
+        if (finalPressure != currentPressure || current.commandedPressureBar == null) {
+            val accepted = commandPressure(finalPressure, nowMs, source = stageName)
+            if (accepted) {
+                lastYieldCommandMs = nowMs
+                lastFlowCorrectionMs = nowMs
+                lastCorrectionFlowGps = flow
+            }
+        } else {
+            // Holding at target — advance the incremental timer so we don't re-check every reading.
+            lastFlowCorrectionMs = nowMs
+            lastCorrectionFlowGps = flow
+        }
+
+        // One-shot trajectory diagnostics (mirrors the flow-limited cap warning).
+        if (!flowCapWarningLoggedForCurrentStage) {
+            when {
+                finalPressure >= cap && flow < targetFlow - INCREMENTAL_DEADBAND_GPS -> {
+                    flowCapWarningLoggedForCurrentStage = true
+                    recordEvent(
+                        ShotEventType.INFO,
+                        "$stageName: flow ${flow.fmt(2)} g/s below target ${targetFlow.fmt(2)} g/s — pressure capped at ${cap.fmt(2)} bar"
+                    )
+                }
+                tick.mode == "LATE_LIMIT" -> {
+                    flowCapWarningLoggedForCurrentStage = true
+                    recordEvent(ShotEventType.INFO, "$stageName: late-shot correction limiting engaged")
+                }
+                tick.mode == "TASTE_CAP" -> {
+                    flowCapWarningLoggedForCurrentStage = true
+                    recordEvent(ShotEventType.INFO, "$stageName: taste-safe cap limiting late flow increase")
+                }
+            }
+        }
+    }
+
+    /**
+     * Clamp [proposed] pressure to the per-second rise/fall rate envelope relative to
+     * [prevPressure], using the wall-clock gap since the last yield/time command as dt. When
+     * [bypassFallClamp] (a confirmed gush) the fall clamp is skipped so pressure can be dumped
+     * quickly. The first command of a stage establishes the baseline (no clamp).
+     */
+    private fun applyPressureRateEnvelope(
+        proposed: Double,
+        prevPressure: Double,
+        nowMs: Long,
+        bypassFallClamp: Boolean,
+        cfg: YieldTimeTrajectoryConfig
+    ): Double {
+        val lastMs = lastYieldCommandMs ?: return proposed
+        val dtS = (nowMs - lastMs) / 1000.0
+        if (dtS <= 0.0) return proposed
+        val maxRise = cfg.maxPressureRiseBarPerS * dtS
+        val maxFall = cfg.maxPressureFallBarPerS * dtS
+        var p = proposed
+        if (p > prevPressure + maxRise) p = prevPressure + maxRise
+        if (!bypassFallClamp && p < prevPressure - maxFall) p = prevPressure - maxFall
+        return p
+    }
+
+    /**
+     * Conservative gush detector for the fall-clamp bypass (per-tick, called on control ticks).
+     * A single high-flow reading must NOT trigger an aggressive pressure drop, so a gush requires
+     * all of: flow well over the corrected target ([GUSH_MARGIN_GPS]), flow *rising* vs the last
+     * tick, weight already at/ahead of the planned trajectory (so dumping pressure won't sacrifice
+     * the yield target), and the combination holding for [GUSH_CONFIRM_TICKS] consecutive ticks
+     * (one confirmation). Without the bypass pressure still falls — just at the normal rate limit.
+     */
+    private fun detectGush(flow: Double, targetFlow: Double, weightErrorG: Double, stageName: String): Boolean {
+        val rising = prevYieldFlowGps?.let { flow > it } ?: false
+        prevYieldFlowGps = flow
+        val overTarget = flow > targetFlow + GUSH_MARGIN_GPS
+        val aheadOfPlan = weightErrorG <= 0.0   // planned − actual <= 0 ⇒ actual at/ahead of plan
+        val candidate = overTarget && rising && aheadOfPlan
+        gushConfirmTicks = if (candidate) gushConfirmTicks + 1 else 0
+        val gushing = gushConfirmTicks >= GUSH_CONFIRM_TICKS
+        if (gushing && !gushBypassLoggedForCurrentStage) {
+            gushBypassLoggedForCurrentStage = true
+            recordEvent(
+                ShotEventType.INFO,
+                "$stageName: confirmed gush (flow ${flow.fmt(2)} g/s over target ${targetFlow.fmt(2)}) — easing pressure fast"
+            )
+        }
+        return gushing
+    }
+
     private fun exitReason(nowMs: Long, weight: Double, flow: Double, safetyTimeout: Boolean): String? {
         val current = state.value
         val stage = current.selectedProfile.stages.getOrNull(current.currentStageIndex) ?: return null
@@ -602,6 +869,17 @@ class ShotController(
         // even when the configured exit conditions use ALL mode and never all become true.
         if (manualSkipRequested) return "manual skip"
         if (safetyTimeout) return "safety timeout"
+
+        // Yield/time trajectory completes after targetDurationS of *extraction* (measured from
+        // first drop), not stage time — pre-infusion before first drop doesn't count against the
+        // recipe clock, so stageTimeGteMs would end the shot early.
+        if (stage.type == StageType.YIELD_TIME_TRAJECTORY) {
+            val extStart = yieldExtractionStartMs
+            val durationMs = stage.yieldTime?.let { (it.targetDurationS * 1000).toLong() }
+            if (extStart != null && durationMs != null && nowMs - extStart >= durationMs) {
+                return "trajectory ${stage.yieldTime!!.targetDurationS.fmt(0)}s elapsed"
+            }
+        }
 
         data class Cond(val triggered: Boolean, val reason: String)
 
@@ -639,11 +917,23 @@ class ShotController(
         manualSkipRequested = false
         stageStartMs = nowMs
         stageEntryPressureBar = current.commandedPressureBar
+        // Stage-relative yield baseline + a fresh rate-envelope clock and gush state for a
+        // yield/time stage.
+        stageEntryWeightG = weight
+        lastYieldCommandMs = null
+        prevYieldFlowGps = null
+        gushConfirmTicks = 0
+        gushBypassLoggedForCurrentStage = false
+        yieldExtractionStartMs = null
+        yieldExtractionStartWeightG = null
+        yieldPreInfusionLogged = false
 
         if (nextIndex >= profile.stages.size) {
             sendStop("Profile complete", nowMs, weight)
             return
         }
+
+        configurePlannerForStage(profile.stages[nextIndex])
 
         state.update {
             it.copy(
@@ -838,13 +1128,53 @@ class ShotController(
     private fun appendSample(nowMs: Long, weight: Double, flow: Double, altFlowGps: Double? = null) {
         val current = state.value
         val shotStart = shotStartMs ?: nowMs
+
+        // Yield/time telemetry: re-evaluate the planner (pure) for this reading so the sample
+        // carries target weight/flow, the corrected target, and the trajectory error. Only on a
+        // YIELD_TIME_TRAJECTORY stage; null on every other stage, so other shots are unchanged.
+        val stage = current.selectedProfile.stages.getOrNull(current.currentStageIndex)
+        var targetWeight: Double? = null
+        var targetFlow: Double? = null
+        var correctedFlow: Double? = null
+        var weightError: Double? = null
+        var flowError: Double? = null
+        var progressPct: Double? = null
+        var plannerMode: String? = null
+        if (stage?.type == StageType.YIELD_TIME_TRAJECTORY && stage.yieldTime != null) {
+            val extStart = yieldExtractionStartMs
+            if (extStart == null) {
+                // Pre-infusion: no trajectory yet (flow is unobservable), so leave the target
+                // fields null — the report's target curves begin at first drop.
+                plannerMode = "PREINFUSION"
+            } else {
+                val anchorWeight = yieldExtractionStartWeightG ?: weight
+                val extractionElapsedMs = nowMs - extStart
+                val yieldGained = (weight - anchorWeight).coerceAtLeast(0.0)
+                val tick = yieldPlanner.evaluate(extractionElapsedMs, yieldGained)
+                targetWeight = anchorWeight + tick.plannedStageWeightG
+                targetFlow = tick.plannedFlowGps
+                correctedFlow = tick.correctedTargetFlowGps
+                weightError = tick.weightErrorG
+                flowError = flow - tick.correctedTargetFlowGps
+                progressPct = tick.progressPct
+                plannerMode = tick.mode
+            }
+        }
+
         val sample = ShotSample(
             timeMs = nowMs - shotStart,
             weightG = weight,
             flowGps = flow,
             commandedPressureBar = current.commandedPressureBar,
             stageName = current.currentStageName,
-            altFlowGps = altFlowGps
+            altFlowGps = altFlowGps,
+            targetWeightG = targetWeight,
+            targetFlowGps = targetFlow,
+            correctedTargetFlowGps = correctedFlow,
+            weightErrorG = weightError,
+            flowErrorGps = flowError,
+            trajectoryProgressPct = progressPct,
+            plannerMode = plannerMode
         )
         state.update { it.copy(samples = (it.samples + sample).takeLast(MAX_LOG_ITEMS)) }
     }
@@ -876,6 +1206,14 @@ class ShotController(
         shotStoppedMs = null
         stageStartMs = null
         stageEntryPressureBar = null
+        stageEntryWeightG = null
+        lastYieldCommandMs = null
+        prevYieldFlowGps = null
+        gushConfirmTicks = 0
+        gushBypassLoggedForCurrentStage = false
+        yieldExtractionStartMs = null
+        yieldExtractionStartWeightG = null
+        yieldPreInfusionLogged = false
         lastValidWeightMs = null
         armedStopSeenMs = null
         stopSent = false
@@ -888,6 +1226,7 @@ class ShotController(
         lastCorrectionFlowGps = null
         flowEstimator.reset()
         flowFeedForward.reset()
+        yieldPlanner.reset()
         lutManager.resetThrottle()
     }
 
@@ -997,5 +1336,12 @@ class ShotController(
         // target, so far-from-target start-up retries are unaffected.
         private const val STALL_EPSILON_BAR = 0.25
         private const val STALL_HOLD_BAND_BAR = 1.0
+
+        // Yield/time stage: deadband for the incremental-P flow tracker.
+        private const val INCREMENTAL_DEADBAND_GPS = 0.1
+        // Gush detection (fall-clamp bypass): flow must exceed the corrected target by this much,
+        // be rising, with weight at/ahead of plan, for this many consecutive control ticks.
+        private const val GUSH_MARGIN_GPS = 0.6
+        private const val GUSH_CONFIRM_TICKS = 2
     }
 }

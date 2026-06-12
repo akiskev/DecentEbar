@@ -4,6 +4,7 @@ import dev.akiskev.decentebar.model.ShotEvent
 import dev.akiskev.decentebar.model.ShotEventType
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotSample
+import dev.akiskev.decentebar.model.StageType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -98,12 +99,28 @@ ${chartScript()}
         parts += "$stageCount stages · ${log.samples.size} samples · ${log.events.size} events"
         log.flowSource?.let { parts += "Flow: $it" }
         log.appVersion?.let { parts += "App: $it" }
+
+        // Final yield/time error against a YIELD_TIME_TRAJECTORY stage, measured over that stage's
+        // own sample span (yield is stage-relative). Only the planner samples carry targetFlowGps.
+        val ytStage = log.profile?.stages?.firstOrNull { it.type == StageType.YIELD_TIME_TRAJECTORY }?.yieldTime
+        val ytSamples = log.samples.filter { it.targetFlowGps != null }
+        if (ytStage != null && ytSamples.size >= 2) {
+            val yieldGained = ytSamples.last().weightG - ytSamples.first().weightG
+            parts += "Yield error: ${"%+.1f".format(yieldGained - ytStage.targetYieldG)}g"
+            val stageDurS = (ytSamples.last().timeMs - ytSamples.first().timeMs) / 1000.0
+            parts += "Time error: ${"%+.1f".format(stageDurS - ytStage.targetDurationS)}s"
+        }
         return parts.joinToString(" · ")
     }
 
-    // D[i] = [timeMs, scaleFlow, pressure|null, weight, stageIdx, altFlow|null]
+    // D[i] = [timeMs, scaleFlow, pressure|null, weight, stageIdx, altFlow|null,
+    //         targetWeight|null, plannedTargetFlow|null, correctedTargetFlow|null]
+    // The last three are populated only on YIELD_TIME_TRAJECTORY samples (null otherwise).
     private fun buildSamplesJs(samples: List<ShotSample>, stageNames: List<String>): String {
         val idx = stageNames.withIndex().associate { (i, n) -> n to i }
+        fun StringBuilder.appendNum(v: Double?, fmt: String) {
+            if (v != null) append(fmt.format(v)) else append("null")
+        }
         return buildString {
             append('[')
             samples.forEachIndexed { i, s ->
@@ -111,11 +128,17 @@ ${chartScript()}
                 append('[')
                 append(s.timeMs).append(',')
                 append("%.3f".format(s.flowGps)).append(',')
-                if (s.commandedPressureBar != null) append("%.2f".format(s.commandedPressureBar)) else append("null")
+                appendNum(s.commandedPressureBar, "%.2f")
                 append(',')
                 append("%.2f".format(s.weightG)).append(',')
                 append(idx[s.stageName] ?: 0).append(',')
-                if (s.altFlowGps != null) append("%.3f".format(s.altFlowGps)) else append("null")
+                appendNum(s.altFlowGps, "%.3f")
+                append(',')
+                appendNum(s.targetWeightG, "%.2f")
+                append(',')
+                appendNum(s.targetFlowGps, "%.3f")
+                append(',')
+                appendNum(s.correctedTargetFlowGps, "%.3f")
                 append(']')
             }
             append(']')
@@ -168,6 +191,9 @@ const times=D.map(d=>d[0]/1000);
 const stageIdxs=D.map(d=>d[4]);
 const hasAlt=D.some(d=>d[5]!==null);
 const hasTargets=TARGETS.some(t=>t!==null);
+// Yield/time trajectory overlays (present only on YIELD_TIME_TRAJECTORY samples).
+const hasYieldWeight=D.some(d=>d[6]!==null);
+const hasYieldFlow=D.some(d=>d[7]!==null);
 // Build one band per contiguous run of the same stage. si = stage index (for the target lookup).
 const bands=[];
 let last=-1;
@@ -241,11 +267,18 @@ const xyFlow=times.map((t,i)=>({x:t,y:D[i][1]}));
 const xyPressure=times.map((t,i)=>({x:t,y:D[i][2]}));
 const xyWeight=times.map((t,i)=>({x:t,y:D[i][3]}));
 const xyAlt=hasAlt?times.map((t,i)=>({x:t,y:D[i][5]})):null;
+const xyTW=hasYieldWeight?times.map((t,i)=>({x:t,y:D[i][6]})):null;
+const xyPTF=hasYieldFlow?times.map((t,i)=>({x:t,y:D[i][7]})):null;
+const xyCTF=hasYieldFlow?times.map((t,i)=>({x:t,y:D[i][8]})):null;
 const datasets=[
   {label:hasAlt?'Scale Flow (g/s)':'Flow (g/s)',data:xyFlow,borderColor:'#C9A55A',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',tension:0.2},
   ...(hasAlt?[{label:'Calc Flow (g/s)',data:xyAlt,borderColor:'#9b6fda',backgroundColor:'transparent',borderWidth:1,borderDash:[4,3],pointRadius:0,yAxisID:'yL',tension:0.2,spanGaps:true}]:[]),
   {label:'Pressure (bar)',data:xyPressure,borderColor:'#B07355',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yL',spanGaps:true},
   {label:'Weight (g)',data:xyWeight,borderColor:'#6A9E88',backgroundColor:'transparent',borderWidth:1.5,pointRadius:0,yAxisID:'yR'},
+  // Yield/time trajectory overlays: planned vs corrected target flow, and the target weight curve.
+  ...(hasYieldFlow?[{label:'Planned Target Flow (g/s)',data:xyPTF,borderColor:TARGET_COLOR,backgroundColor:'transparent',borderWidth:1.5,borderDash:[6,4],pointRadius:0,yAxisID:'yL',spanGaps:true}]:[]),
+  ...(hasYieldFlow?[{label:'Corrected Target Flow (g/s)',data:xyCTF,borderColor:'#E8854A',backgroundColor:'transparent',borderWidth:1.5,borderDash:[2,3],pointRadius:0,yAxisID:'yL',spanGaps:true}]:[]),
+  ...(hasYieldWeight?[{label:'Target Weight (g)',data:xyTW,borderColor:'#6A9E88',backgroundColor:'transparent',borderWidth:1.5,borderDash:[6,4],pointRadius:0,yAxisID:'yR',spanGaps:true}]:[]),
   // Legend-only entry for the target lines (the lines themselves are drawn by targetPlugin).
   ...(hasTargets?[{label:'Target Flow (g/s)',data:[],borderColor:TARGET_COLOR,backgroundColor:'transparent',borderWidth:2,borderDash:[8,6],pointRadius:0,yAxisID:'yL'}]:[])
 ];

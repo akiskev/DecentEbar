@@ -179,6 +179,26 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         style = Paint.Style.STROKE; isAntiAlias = true
         pathEffect = DashPathEffect(floatArrayOf(base * 0.0074f, base * 0.0074f), 0f)
     }
+    // Yield/time trajectory overlays (drawn only when a YIELD_TIME_TRAJECTORY stage produced
+    // per-sample targets): planned vs corrected target flow (left axis) and target weight (right).
+    private val plannedFlowPaint = Paint().apply {
+        color = Color.argb(190, 242, 201, 76)   // #F2C94C light gold
+        strokeWidth = base * 0.00139f
+        style = Paint.Style.STROKE; isAntiAlias = true
+        pathEffect = DashPathEffect(floatArrayOf(base * 0.0055f, base * 0.004f), 0f)
+    }
+    private val correctedFlowPaint = Paint().apply {
+        color = Color.argb(205, 232, 133, 74)   // #E8854A orange
+        strokeWidth = base * 0.00139f
+        style = Paint.Style.STROKE; isAntiAlias = true
+        pathEffect = DashPathEffect(floatArrayOf(base * 0.003f, base * 0.003f), 0f)
+    }
+    private val targetWeightPaint = Paint().apply {
+        color = Color.argb(150, 106, 158, 136)  // sage, dashed (matches the weight series)
+        strokeWidth = base * 0.00139f
+        style = Paint.Style.STROKE; isAntiAlias = true
+        pathEffect = DashPathEffect(floatArrayOf(base * 0.0055f, base * 0.004f), 0f)
+    }
 
     private val flowDotPaint    = Paint().apply { color = EW.flow;     style = Paint.Style.FILL; isAntiAlias = true }
     private val pressureDotPaint= Paint().apply { color = EW.pressure; style = Paint.Style.FILL; isAntiAlias = true }
@@ -237,6 +257,7 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
         drawAxes(canvas)
         drawFirstDrop(canvas, frameTimeMs)
         drawTargetFlowLines(canvas, frameTimeMs)
+        drawYieldTrajectory(canvas, visible)
         drawLines(canvas, visible)
         drawCurrentDots(canvas, visible)
         drawAxisLabels(canvas)
@@ -336,6 +357,35 @@ class ShotFrameRenderer(private val log: ShotLog, private val w: Int, private va
             canvas.drawLine(xPx(b.startMs), yPxLeft(tf.toFloat()),
                 xPx(min(b.endMs, frameTimeMs)), yPxLeft(tf.toFloat()), targetPaint)
         }
+    }
+
+    /**
+     * Yield/time trajectory overlays: planned target flow, corrected target flow (left axis), and
+     * the planned target weight curve (right axis). Only the YIELD_TIME_TRAJECTORY samples carry
+     * these fields, so nulls are skipped and other shots draw nothing here.
+     */
+    private fun drawYieldTrajectory(canvas: Canvas, samples: List<ShotSample>) {
+        if (samples.none { it.targetFlowGps != null }) return
+        val twPath = Path(); val ptfPath = Path(); val ctfPath = Path()
+        var twFirst = true; var ptfFirst = true; var ctfFirst = true
+        samples.forEach { s ->
+            val x = xPx(s.timeMs)
+            s.targetWeightG?.let {
+                val y = yPxRight(it.toFloat())
+                if (twFirst) { twPath.moveTo(x, y); twFirst = false } else twPath.lineTo(x, y)
+            }
+            s.targetFlowGps?.let {
+                val y = yPxLeft(it.toFloat())
+                if (ptfFirst) { ptfPath.moveTo(x, y); ptfFirst = false } else ptfPath.lineTo(x, y)
+            }
+            s.correctedTargetFlowGps?.let {
+                val y = yPxLeft(it.toFloat())
+                if (ctfFirst) { ctfPath.moveTo(x, y); ctfFirst = false } else ctfPath.lineTo(x, y)
+            }
+        }
+        canvas.drawPath(twPath, targetWeightPaint)
+        canvas.drawPath(ptfPath, plannedFlowPaint)
+        canvas.drawPath(ctfPath, correctedFlowPaint)
     }
 
     private fun drawLines(canvas: Canvas, samples: List<ShotSample>) {

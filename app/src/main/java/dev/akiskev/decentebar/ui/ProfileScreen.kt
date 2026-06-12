@@ -3,8 +3,10 @@ package dev.akiskev.decentebar.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -50,13 +53,21 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.akiskev.decentebar.engine.CurveMath
+import dev.akiskev.decentebar.model.CurvePoint
 import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.ExitCondition
 import dev.akiskev.decentebar.model.ExitMode
 import dev.akiskev.decentebar.model.FeedForwardConfig
+import dev.akiskev.decentebar.model.FlowCurveType
+import dev.akiskev.decentebar.model.PressureCurveAxis
+import dev.akiskev.decentebar.model.PressureCurveConfig
 import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.StageSafety
 import dev.akiskev.decentebar.model.StageType
+import dev.akiskev.decentebar.model.TastePriorityMode
+import dev.akiskev.decentebar.model.YieldTimeTrajectoryConfig
+import dev.akiskev.decentebar.util.formatDecimals
 
 @Composable
 internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
@@ -66,6 +77,10 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
     var exportText by remember { mutableStateOf("") }
     var showProfilePanel by remember { mutableStateOf(false) }
     var pendingProfileJson by remember { mutableStateOf<String?>(null) }
+    // Index of the stage whose flow curve is open in the full-screen editor (null = closed). Hosted
+    // here (not in a Dialog) so the editor uses the real screen width — a Dialog window gets
+    // width-clipped in landscape.
+    var curveEditorIndex by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(state.exportedProfileJson) {
         if (state.exportedProfileJson.isNotBlank()) exportText = state.exportedProfileJson
@@ -95,6 +110,7 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -267,6 +283,10 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                                 stages = editedProfile.stages.replaceAt(index, updated)
                             )
                         },
+                        onProfileTargetWeight = { w ->
+                            editedProfile = editedProfile.copy(targetWeightG = w)
+                        },
+                        onEditCurve = { curveEditorIndex = index },
                         onRemove = {
                             editedProfile = editedProfile.copy(
                                 stages = editedProfile.stages.removeAt(index)
@@ -287,6 +307,72 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
             }
         }
     }
+
+        // Full-screen flow-curve editor overlay (covers the content area, so it gets the real
+        // screen width — see curveEditorIndex).
+        val editIdx = curveEditorIndex
+        if (editIdx != null) {
+            val st = editedProfile.stages.getOrNull(editIdx)
+            // Dispatch on the stage TYPE, not on which configs are non-null: switching a stage's type
+            // keeps the old config (so toggling back is lossless), so e.g. a PRESSURE_CURVE stage can
+            // still carry a stale yieldTime.
+            val yt = st?.yieldTime.takeIf { st?.type == StageType.YIELD_TIME_TRAJECTORY }
+            val pc = (st?.pressureCurve ?: PressureCurveConfig(points = defaultPressurePoints()))
+                .takeIf { st?.type == StageType.PRESSURE_CURVE }
+            if (st != null && yt != null) {
+                FlowCurveEditorContent(
+                    initialPoints = yt.customPoints.ifEmpty { defaultCustomPoints() },
+                    initialDurationS = yt.targetDurationS,
+                    initialMaxFlowGps = yt.maxFlowGps,
+                    onCancel = { curveEditorIndex = null },
+                    onConfirm = { pts, computedYield, dur, mf ->
+                        editedProfile = editedProfile.copy(
+                            targetWeightG = computedYield,
+                            stages = editedProfile.stages.replaceAt(
+                                editIdx,
+                                st.copy(
+                                    yieldTime = yt.copy(
+                                        curveType = FlowCurveType.CUSTOM_POINTS,
+                                        customPoints = pts,
+                                        targetYieldG = computedYield,
+                                        targetDurationS = dur,
+                                        maxFlowGps = mf
+                                    )
+                                )
+                            )
+                        )
+                        curveEditorIndex = null
+                    }
+                )
+            } else if (st != null && pc != null) {
+                PressureCurveEditorContent(
+                    initialPoints = pc.points.ifEmpty { defaultPressurePoints() },
+                    axis = pc.axis,
+                    initialXMax = if (pc.axis == PressureCurveAxis.TIME) pc.durationS else pc.maxWeightG,
+                    initialMaxPressureBar = pc.maxPressureBar,
+                    onCancel = { curveEditorIndex = null },
+                    onConfirm = { pts, xMax, maxBar ->
+                        editedProfile = editedProfile.copy(
+                            stages = editedProfile.stages.replaceAt(
+                                editIdx,
+                                st.copy(
+                                    pressureCurve = pc.copy(
+                                        points = pts,
+                                        maxPressureBar = maxBar,
+                                        durationS = if (pc.axis == PressureCurveAxis.TIME) xMax else pc.durationS,
+                                        maxWeightG = if (pc.axis == PressureCurveAxis.WEIGHT) xMax else pc.maxWeightG
+                                    )
+                                )
+                            )
+                        )
+                        curveEditorIndex = null
+                    }
+                )
+            } else {
+                curveEditorIndex = null
+            }
+        }
+    }
 }
 
 @Composable
@@ -296,6 +382,8 @@ private fun StageEditor(
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onStageChange: (ProfileStage) -> Unit,
+    onProfileTargetWeight: (Double) -> Unit,
+    onEditCurve: () -> Unit,
     onRemove: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
@@ -486,6 +574,335 @@ private fun StageEditor(
                             steps = 59,
                             unit = "ms",
                             onChange = { onStageChange(stage.copy(rampDurationMs = it)) }
+                        )
+                    }
+                    StageType.YIELD_TIME_TRAJECTORY -> {
+                        val yt = stage.yieldTime ?: YieldTimeTrajectoryConfig()
+                        fun updateYt(block: (YieldTimeTrajectoryConfig) -> YieldTimeTrajectoryConfig) {
+                            onStageChange(stage.copy(yieldTime = block(yt)))
+                        }
+
+                        // For a hand-drawn custom curve, yield + duration come from the editor
+                        // (yield = area), so the analytic yield/time sliders are hidden.
+                        if (yt.curveType != FlowCurveType.CUSTOM_POINTS) {
+                            SliderField(
+                                label = "Stage yield",
+                                value = yt.targetYieldG,
+                                valueRange = 0f..80f,
+                                steps = 159,
+                                unit = "g",
+                                onChange = { v -> updateYt { it.copy(targetYieldG = v) } }
+                            )
+                            SliderField(
+                                label = "Target time",
+                                value = yt.targetDurationS,
+                                valueRange = 0f..90f,
+                                steps = 179,
+                                unit = "s",
+                                onChange = { v -> updateYt { it.copy(targetDurationS = v) } }
+                            )
+                        }
+
+                        Text(
+                            "Curve",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FlowCurveType.entries.forEach { curve ->
+                                FilterChip(
+                                    selected = yt.curveType == curve,
+                                    onClick = {
+                                        if (curve == FlowCurveType.CUSTOM_POINTS && yt.customPoints.size < 2) {
+                                            // Seed from a sensible default so the editor opens with a curve.
+                                            val seeded = defaultCustomPoints()
+                                            updateYt {
+                                                it.copy(
+                                                    curveType = curve,
+                                                    customPoints = seeded,
+                                                    targetYieldG = CurveMath.areaG(seeded, it.targetDurationS)
+                                                )
+                                            }
+                                        } else {
+                                            // Only the type changes: the shape hints (start/peak/end)
+                                            // are shared by all analytic presets, so mutating them here
+                                            // would corrupt the other presets' previews. DECLINING is
+                                            // guaranteed to decline by the planner itself (rawKnots).
+                                            updateYt { it.copy(curveType = curve) }
+                                        }
+                                    },
+                                    label = { Text(curve.uiLabel()) }
+                                )
+                            }
+                        }
+
+                        // Live preview of the curve under the type chips — for every curve type. For
+                        // analytic types it samples the planner's normalized flow; for Custom it's the
+                        // drawn points, with an Edit button into the full-screen editor.
+                        run {
+                            val previewPts = yt.previewPoints()
+                            val previewMax = (previewPts.maxOfOrNull { it.flowGps } ?: 1.0)
+                                .times(1.15).coerceAtLeast(0.5)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                CurveThumbnail(
+                                    points = previewPts,
+                                    yMax = previewMax,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(64.dp)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
+                                )
+                                Column {
+                                    Text(
+                                        "Yield ≈ ${yt.targetYieldG.formatDecimals(1)} g",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    if (yt.curveType == FlowCurveType.CUSTOM_POINTS) {
+                                        OutlinedButton(onClick = onEditCurve) { Text("Edit curve") }
+                                    }
+                                }
+                            }
+                        }
+
+                        Text(
+                            "Taste mode",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TastePriorityMode.entries.forEach { mode ->
+                                FilterChip(
+                                    selected = yt.tastePriorityMode == mode,
+                                    onClick = { updateYt { it.copy(tastePriorityMode = mode) } },
+                                    label = { Text(mode.uiLabel()) }
+                                )
+                            }
+                        }
+
+                        SliderField(
+                            label = "Max pressure",
+                            value = yt.maxPressureBar,
+                            valueRange = 0f..12f,
+                            steps = 119,
+                            unit = "bar",
+                            onChange = { v -> updateYt { it.copy(maxPressureBar = v) } }
+                        )
+                        SliderField(
+                            label = "Max flow",
+                            value = yt.maxFlowGps,
+                            valueRange = 0f..8f,
+                            steps = 159,
+                            unit = "g/s",
+                            onChange = { v -> updateYt { it.copy(maxFlowGps = v) } }
+                        )
+                        SliderField(
+                            label = "Pre-infuse",
+                            value = yt.preInfusionPressureBar,
+                            valueRange = 0f..12f,
+                            steps = 119,
+                            unit = "bar",
+                            onChange = { v -> updateYt { it.copy(preInfusionPressureBar = v) } }
+                        )
+                        SliderField(
+                            label = "Extract floor",
+                            value = yt.minExtractionPressureBar,
+                            valueRange = 0f..12f,
+                            steps = 119,
+                            unit = "bar",
+                            onChange = { v -> updateYt { it.copy(minExtractionPressureBar = v) } }
+                        )
+
+                        val feedForwardOn = yt.feedForward != null
+                        LabeledSwitch("Resistance feed-forward", feedForwardOn) { on ->
+                            updateYt { it.copy(feedForward = if (on) FeedForwardConfig() else null) }
+                        }
+
+                        var showAdvanced by remember { mutableStateOf(false) }
+                        LabeledSwitch("Advanced", showAdvanced) { showAdvanced = it }
+                        AnimatedVisibility(visible = showAdvanced) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (yt.curveType != FlowCurveType.CUSTOM_POINTS) {
+                                SliderField(
+                                    label = "Start flow",
+                                    value = yt.startFlowGps,
+                                    valueRange = 0f..4f,
+                                    steps = 79,
+                                    unit = "g/s",
+                                    onChange = { v -> updateYt { it.copy(startFlowGps = v) } }
+                                )
+                                SliderField(
+                                    label = "Peak flow",
+                                    value = yt.peakFlowGps,
+                                    valueRange = 0f..4f,
+                                    steps = 79,
+                                    unit = "g/s",
+                                    onChange = { v -> updateYt { it.copy(peakFlowGps = v) } }
+                                )
+                                SliderField(
+                                    label = "End flow",
+                                    value = yt.endFlowGps,
+                                    valueRange = 0f..4f,
+                                    steps = 79,
+                                    unit = "g/s",
+                                    onChange = { v -> updateYt { it.copy(endFlowGps = v) } }
+                                )
+                                SliderField(
+                                    label = "Peak position",
+                                    value = yt.peakAtPct,
+                                    valueRange = 0f..1f,
+                                    steps = 19,
+                                    unit = "",
+                                    onChange = { v -> updateYt { it.copy(peakAtPct = v) } }
+                                )
+                                }
+                                SliderField(
+                                    label = "Correction strength",
+                                    value = yt.correctionStrength,
+                                    valueRange = 0f..1f,
+                                    steps = 19,
+                                    unit = "",
+                                    onChange = { v -> updateYt { it.copy(correctionStrength = v) } }
+                                )
+                                SliderField(
+                                    label = "Late-shot window",
+                                    value = yt.lateShotCorrectionLimitS,
+                                    valueRange = 0f..15f,
+                                    steps = 29,
+                                    unit = "s",
+                                    onChange = { v -> updateYt { it.copy(lateShotCorrectionLimitS = v) } }
+                                )
+                                SliderField(
+                                    label = "Max rise rate",
+                                    value = yt.maxPressureRiseBarPerS,
+                                    valueRange = 0f..5f,
+                                    steps = 49,
+                                    unit = "bar/s",
+                                    onChange = { v -> updateYt { it.copy(maxPressureRiseBarPerS = v) } }
+                                )
+                                SliderField(
+                                    label = "Max fall rate",
+                                    value = yt.maxPressureFallBarPerS,
+                                    valueRange = 0f..5f,
+                                    steps = 49,
+                                    unit = "bar/s",
+                                    onChange = { v -> updateYt { it.copy(maxPressureFallBarPerS = v) } }
+                                )
+                                SliderField(
+                                    label = "Pre-infuse max",
+                                    value = yt.preInfusionMaxS,
+                                    valueRange = 0f..40f,
+                                    steps = 79,
+                                    unit = "s",
+                                    onChange = { v -> updateYt { it.copy(preInfusionMaxS = v) } }
+                                )
+                            }
+                        }
+                        Text(
+                            "“${yt.targetYieldG.toInt()} g in ${yt.targetDurationS.toInt()} s”, measured from first drop. " +
+                                "Pre-infuses at ${yt.preInfusionPressureBar.toInt()} bar until the puck yields, then the " +
+                                "planner runs the flow trajectory for ${yt.targetDurationS.toInt()} s — the pre-infusion " +
+                                "time isn't charged against the recipe. The extraction floor holds at least " +
+                                "${yt.minExtractionPressureBar.toInt()} bar through the shot (released on a gush) so the " +
+                                "tail doesn't sag into under-extraction. Pressure stays within the limits above.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    StageType.PRESSURE_CURVE -> {
+                        val pc = stage.pressureCurve ?: PressureCurveConfig()
+                        fun updatePc(block: (PressureCurveConfig) -> PressureCurveConfig) {
+                            onStageChange(stage.copy(pressureCurve = block(pc)))
+                        }
+
+                        Text(
+                            "Axis",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = pc.axis == PressureCurveAxis.TIME,
+                                onClick = { updatePc { it.copy(axis = PressureCurveAxis.TIME) } },
+                                label = { Text("Time") }
+                            )
+                            FilterChip(
+                                selected = pc.axis == PressureCurveAxis.WEIGHT,
+                                onClick = { updatePc { it.copy(axis = PressureCurveAxis.WEIGHT) } },
+                                label = { Text("Weight") }
+                            )
+                        }
+
+                        if (pc.axis == PressureCurveAxis.TIME) {
+                            SliderField(
+                                label = "Duration",
+                                value = pc.durationS,
+                                valueRange = 5f..90f,
+                                steps = 0,
+                                unit = "s",
+                                decimals = 0,
+                                onChange = { v -> updatePc { it.copy(durationS = v) } }
+                            )
+                        } else {
+                            SliderField(
+                                label = "Max weight",
+                                value = pc.maxWeightG,
+                                valueRange = 10f..120f,
+                                steps = 0,
+                                unit = "g",
+                                decimals = 0,
+                                onChange = { v -> updatePc { it.copy(maxWeightG = v) } }
+                            )
+                        }
+                        SliderField(
+                            label = "Max pressure",
+                            value = pc.maxPressureBar,
+                            valueRange = 1f..12f,
+                            steps = 0,
+                            unit = "bar",
+                            onChange = { v -> updatePc { it.copy(maxPressureBar = v) } }
+                        )
+
+                        // Curve preview (drawn points or the default) + Edit button into the editor.
+                        run {
+                            val previewPts = pc.points.ifEmpty { defaultPressurePoints() }
+                                .map { CurvePoint(it.xPct, it.pressureBar) }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                CurveThumbnail(
+                                    points = previewPts,
+                                    yMax = pc.maxPressureBar.coerceAtLeast(0.5),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(64.dp)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
+                                )
+                                Column {
+                                    Text(
+                                        "Peak ${(pc.points.maxOfOrNull { it.pressureBar } ?: pc.maxPressureBar).formatDecimals(1)} bar",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    OutlinedButton(onClick = onEditCurve) { Text("Edit curve") }
+                                }
+                            }
+                        }
+
+                        Text(
+                            "Commands the drawn pressure directly against " +
+                                "${if (pc.axis == PressureCurveAxis.TIME) "stage time" else "cup weight"}, capped at " +
+                                "${pc.maxPressureBar.toInt()} bar. No feedback — the curve is the schedule.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
                         )
                     }
                     StageType.STOP -> {

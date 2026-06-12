@@ -40,6 +40,40 @@ object ProfileValidator {
                     if (stage.rampEndPressureBar == null) add("$prefix end pressure is required")
                     if (stage.rampDurationMs == null) add("$prefix duration is required")
                 }
+                StageType.YIELD_TIME_TRAJECTORY -> {
+                    val yt = stage.yieldTime
+                    if (yt == null) {
+                        add("$prefix yield/time config is required")
+                    } else {
+                        if (yt.targetYieldG <= 0.0) add("$prefix target yield must be greater than 0")
+                        if (yt.targetDurationS <= 0.0) add("$prefix target time must be greater than 0")
+                        if (yt.maxFlowGps <= 0.0) add("$prefix max flow must be greater than 0")
+                        if (yt.maxPressureBar <= 0.0) add("$prefix max pressure must be greater than 0")
+                        if (yt.minFlowGps > yt.maxFlowGps) add("$prefix min flow cannot exceed max flow")
+                        if (yt.minPressureBar > yt.maxPressureBar) add("$prefix min pressure cannot exceed max pressure")
+                        if (yt.minExtractionPressureBar < 0.0) add("$prefix extraction floor cannot be negative")
+                        if (yt.minExtractionPressureBar > yt.maxPressureBar) add("$prefix extraction floor cannot exceed max pressure")
+                        if (yt.correctionStrength !in 0.0..1.0) add("$prefix correction strength must be between 0 and 1")
+                        if (yt.maxPressureRiseBarPerS <= 0.0) add("$prefix max pressure rise rate must be greater than 0")
+                        if (yt.maxPressureFallBarPerS <= 0.0) add("$prefix max pressure fall rate must be greater than 0")
+                        if (yt.lateShotCorrectionLimitS < 0.0) add("$prefix late-shot correction window cannot be negative")
+                        if (yt.curveType == FlowCurveType.CUSTOM_POINTS && yt.customPoints.size < 2) {
+                            add("$prefix custom curve needs at least 2 points")
+                        }
+                    }
+                }
+                StageType.PRESSURE_CURVE -> {
+                    val pc = stage.pressureCurve
+                    if (pc == null) {
+                        add("$prefix pressure curve config is required")
+                    } else {
+                        if (pc.maxPressureBar <= 0.0) add("$prefix max pressure must be greater than 0")
+                        if (pc.minPressureBar > pc.maxPressureBar) add("$prefix min pressure cannot exceed max pressure")
+                        if (pc.axis == PressureCurveAxis.TIME && pc.durationS <= 0.0) add("$prefix duration must be greater than 0")
+                        if (pc.axis == PressureCurveAxis.WEIGHT && pc.maxWeightG <= 0.0) add("$prefix max weight must be greater than 0")
+                        if (pc.points.size < 2) add("$prefix pressure curve needs at least 2 points")
+                    }
+                }
                 StageType.STOP -> Unit
             }
 
