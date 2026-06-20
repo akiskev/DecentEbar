@@ -4,16 +4,18 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,12 +78,11 @@ private fun StatusBadge(controllerState: ControllerState) {
 internal fun ControlScreen(
     state: MainUiState,
     viewModel: MainViewModel,
-    openAccessibilitySettings: () -> Unit,
     connectToScale: () -> Unit = {},
     disconnectScale: () -> Unit = {}
 ) {
     val scaleLabel = when (state.scaleConnectionState) {
-        ScaleConnectionState.DISCONNECTED -> "Scale"
+        ScaleConnectionState.DISCONNECTED -> "Connect to Bookoo scale"
         ScaleConnectionState.SCANNING -> "Scanning…"
         ScaleConnectionState.CONNECTING -> "Connecting…"
         ScaleConnectionState.CONNECTED -> "Scale ●"
@@ -91,82 +92,70 @@ internal fun ControlScreen(
     val scaleBusy = state.scaleConnectionState == ScaleConnectionState.SCANNING ||
             state.scaleConnectionState == ScaleConnectionState.CONNECTING
 
+    // Only readiness/diagnostic fields that are meaningful while this app is in the foreground.
+    // Live shot telemetry (weight, flow, pressure, stage, …) is intentionally omitted: during a
+    // shot the app runs in the background, so nobody is looking at it here.
     val metrics = listOf(
-        "Controller" to state.controllerState.name,
         "Service" to if (state.serviceEnabled) "Enabled" else "Disabled",
-        "E-Bar foreground" to yesNo(state.snapshot.isForeground),
-        "LUT" to (state.loadedLut?.name ?: "Missing"),
-        "LUT validation" to state.lutValidation.displayText,
-        "Start visible" to yesNo(state.snapshot.hasStart),
-        "Stop visible" to yesNo(state.snapshot.hasStop),
-        "Weight" to (state.currentWeightG?.format(1)?.plus(" g") ?: "--"),
-        "Flow" to "${state.currentFlowGps.format(2)} g/s",
-        "Stage" to state.currentStageName,
-        "Pressure" to (state.commandedPressureBar?.format(2)?.plus(" bar") ?: "--"),
-        "Elapsed" to "${(state.elapsedShotTimeMs / 1000.0).format(1)} s",
-        "Safety" to state.safetyStatus,
-        "Last pressure" to state.lastPressureCommand,
-        "Last stop" to state.lastStopCommand,
-        "Scale" to state.scaleConnectionState.name,
-        "Scale Batt" to (state.scaleBatteryPercent?.let { "$it %" } ?: "--")
+        "Scale Batt" to (state.scaleBatteryPercent?.let { "$it %" } ?: "--"),
+        "Safety" to state.safetyStatus
     )
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Surface(
+            modifier = Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.primaryContainer,
-            shape = MaterialTheme.shapes.small
+            shape = MaterialTheme.shapes.medium
         ) {
-            Column(modifier = Modifier.padding(8.dp)) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Button(onClick = { if (state.isArmed) viewModel.disarm() else viewModel.arm() }) {
-                        Text(if (state.isArmed) "Disarm" else "Arm")
-                    }
-                    Button(
-                        onClick = viewModel::emergencyStop,
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Text("E-Stop")
-                    }
-                    OutlinedButton(onClick = viewModel::manualSkipStage) { Text("Skip Stage") }
-                    TextButton(onClick = openAccessibilitySettings) { Text("Accessibility") }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Machine controls on the left …
+                Button(onClick = { if (state.isArmed) viewModel.disarm() else viewModel.arm() }) {
+                    Text(if (state.isArmed) "Disarm" else "Arm")
                 }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Button(
+                    onClick = viewModel::emergencyStop,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    if (scaleConnected) {
-                        Button(
-                            onClick = disconnectScale,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.secondary
-                            )
-                        ) { Text(scaleLabel) }
-                    } else {
-                        OutlinedButton(
-                            onClick = connectToScale,
-                            enabled = !scaleBusy
-                        ) { Text(scaleLabel) }
-                    }
-                    if (scaleConnected) {
-                        Text(
-                            "Using scale weight & flow",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.secondary
+                    Text("E-Stop")
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                // … scale connection on the right.
+                if (scaleConnected) {
+                    Text(
+                        "Using scale weight & flow",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Button(
+                        onClick = disconnectScale,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary
                         )
-                    }
+                    ) { Text(scaleLabel) }
+                } else {
+                    OutlinedButton(
+                        onClick = connectToScale,
+                        enabled = !scaleBusy
+                    ) { Text(scaleLabel) }
                 }
             }
         }
 
-        Panel("Live Status") {
+        Panel("Status") {
             MetricGrid(metrics)
         }
     }

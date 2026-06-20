@@ -81,7 +81,6 @@ class ShotController(
     // the tree (post-Start "Loading…" overlay). Used to time out the wait for controls.
     private var armedStopSeenMs: Long? = null
     private var stopSent = false
-    private var manualSkipRequested = false
     private var firstDropConsecutiveReadings = 0
     private var firstDropDetected = false
     private var flowCapWarningLoggedForCurrentStage = false
@@ -166,11 +165,6 @@ class ShotController(
         val nowMs = now()
         EbarAccessibilityService.setShouldRun(true)
         sendStop("Emergency stop", nowMs, state.value.currentWeightG, explicitRetry = true)
-    }
-
-    fun manualSkipStage() {
-        manualSkipRequested = true
-        recordEvent(ShotEventType.INFO, "Manual stage skip requested")
     }
 
     fun onSnapshot(snapshot: EbarSnapshot) {
@@ -863,11 +857,9 @@ class ShotController(
         val stageElapsedMs = nowMs - (stageStartMs ?: nowMs)
         val exit = stage.exit
 
-        // Unconditional overrides: the manual-skip button and the per-stage hard time cap
-        // (StageSafety.maxStageTimeMs) always advance the stage, regardless of ExitMode. This
-        // guarantees the user can always skip a stage and that a stuck stage always times out,
-        // even when the configured exit conditions use ALL mode and never all become true.
-        if (manualSkipRequested) return "manual skip"
+        // Unconditional override: the per-stage hard time cap (StageSafety.maxStageTimeMs) always
+        // advances the stage, regardless of ExitMode. This guarantees that a stuck stage always
+        // times out, even when the configured exit conditions use ALL mode and never all become true.
         if (safetyTimeout) return "safety timeout"
 
         // Yield/time trajectory completes after targetDurationS of *extraction* (measured from
@@ -914,7 +906,6 @@ class ShotController(
             weightG = weight
         )
 
-        manualSkipRequested = false
         stageStartMs = nowMs
         stageEntryPressureBar = current.commandedPressureBar
         // Stage-relative yield baseline + a fresh rate-envelope clock and gush state for a
@@ -1217,7 +1208,6 @@ class ShotController(
         lastValidWeightMs = null
         armedStopSeenMs = null
         stopSent = false
-        manualSkipRequested = false
         firstDropConsecutiveReadings = 0
         firstDropDetected = false
         flowCapWarningLoggedForCurrentStage = false
@@ -1234,7 +1224,6 @@ class ShotController(
         stageStartMs = null
         stageEntryPressureBar = null
         lastValidWeightMs = null
-        manualSkipRequested = false
         flowEstimator.reset()
         lutManager.resetThrottle()
     }

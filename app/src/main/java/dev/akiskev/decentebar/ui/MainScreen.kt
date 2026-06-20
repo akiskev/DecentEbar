@@ -94,8 +94,11 @@ fun MainScreen(
             VerticalDivider()
             Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 Header(state)
+                if (!state.serviceEnabled) {
+                    AccessibilityWarningBanner(onEnable = openAccessibilitySettings)
+                }
                 when (selectedTab) {
-                    AppTab.CONTROL -> ControlScreen(state, viewModel, openAccessibilitySettings, connectToScale, disconnectScale)
+                    AppTab.CONTROL -> ControlScreen(state, viewModel, connectToScale, disconnectScale)
                     AppTab.PROFILE -> ProfileScreen(state, viewModel)
                     AppTab.LUT -> LutScreen(state, viewModel)
                     AppTab.DEBUG -> DebugScreen(state)

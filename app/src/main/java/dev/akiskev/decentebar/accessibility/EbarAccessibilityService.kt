@@ -2,8 +2,12 @@ package dev.akiskev.decentebar.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.ComponentName
+import android.content.Context
 import android.graphics.Path
 import android.graphics.Rect
+import android.provider.Settings
+import android.text.TextUtils
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -252,6 +256,26 @@ class EbarAccessibilityService : AccessibilityService() {
 
         fun setShouldRun(value: Boolean) {
             _shouldRun.value = value
+        }
+
+        /**
+         * Authoritative check of whether the user has enabled this accessibility service in system
+         * settings, independent of whether the service is currently bound in this process. Used on
+         * app start/resume so the UI can prompt immediately when it's off, without waiting for (or
+         * being misled by) a not-yet-completed bind after a cold start.
+         */
+        fun isEnabledInSettings(context: Context): Boolean {
+            val expected = ComponentName(context, EbarAccessibilityService::class.java)
+            val enabled = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: return false
+            val splitter = TextUtils.SimpleStringSplitter(':')
+            splitter.setString(enabled)
+            while (splitter.hasNext()) {
+                if (ComponentName.unflattenFromString(splitter.next()) == expected) return true
+            }
+            return false
         }
     }
 }

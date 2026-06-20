@@ -12,8 +12,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.akiskev.decentebar.ui.MainScreen
 import dev.akiskev.decentebar.ui.MainViewModel
@@ -34,6 +38,18 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppEntry(viewModel: MainViewModel = viewModel()) {
     val context = LocalContext.current
+
+    // Re-check whether the accessibility service is enabled every time the app resumes — this fires
+    // on first launch and again when the user returns from the system Accessibility settings screen,
+    // so the warning banner appears/clears immediately without waiting for a service rebind.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshServiceEnabled()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val blePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)

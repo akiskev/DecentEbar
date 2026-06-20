@@ -112,6 +112,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Settings ---
 
+    /**
+     * Re-checks (authoritatively, via system settings) whether the accessibility service is enabled.
+     * Called from the Activity on resume so returning from the system Accessibility screen — or a
+     * cold start where the service hasn't rebound yet — reflects the real state immediately.
+     */
+    fun refreshServiceEnabled() {
+        val enabled = EbarAccessibilityService.isEnabledInSettings(getApplication())
+        _uiState.update { it.copy(serviceEnabled = enabled) }
+    }
+
     fun setDevMode(enabled: Boolean) {
         settingsPrefs.edit().putBoolean(KEY_DEV_MODE, enabled).apply()
         _uiState.update { it.copy(devMode = enabled) }
@@ -124,8 +134,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun disarm() = controller.disarm()
 
     fun emergencyStop() = controller.emergencyStop()
-
-    fun manualSkipStage() = controller.manualSkipStage()
 
     // --- Scale ---
 
