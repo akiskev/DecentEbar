@@ -4,26 +4,50 @@ import dev.akiskev.decentebar.engine.YieldTimeTrajectoryPlanner
 import dev.akiskev.decentebar.model.CurvePoint
 import dev.akiskev.decentebar.model.ExitCondition
 import dev.akiskev.decentebar.model.FlowCurveType
+import dev.akiskev.decentebar.model.ProfileConstraints
 import dev.akiskev.decentebar.model.PressureCurveAxis
 import dev.akiskev.decentebar.model.PressureCurveConfig
 import dev.akiskev.decentebar.model.PressureCurvePoint
 import dev.akiskev.decentebar.model.ProfileStage
+import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.StageSafety
 import dev.akiskev.decentebar.model.StageType
 import dev.akiskev.decentebar.model.TastePriorityMode
 import dev.akiskev.decentebar.model.YieldTimeTrajectoryConfig
 
-internal fun newStage(): ProfileStage {
-    return ProfileStage(
-        name = "New Stage",
-        type = StageType.FIXED_PRESSURE,
-        fixedPressureBar = 2.0,
-        exit = ExitCondition(weightGte = 1.0),
-        safety = StageSafety()
+internal fun newPressureCurveProfile(existingNames: Set<String>): ShotProfile {
+    val name = uniqueName("New Pressure Profile", existingNames)
+    val targetWeight = ProfileConstraints.DEFAULT_TARGET_WEIGHT_G
+    return ShotProfile(
+        name = name,
+        targetWeightG = targetWeight,
+        stopOffsetG = ProfileConstraints.DEFAULT_STOP_OFFSET_G,
+        maxShotTimeMs = ProfileConstraints.DEFAULT_MAX_SHOT_TIME_MS,
+        stages = listOf(newStage(targetWeight))
     )
 }
 
-internal fun ProfileStage.withTypeDefaults(newType: StageType): ProfileStage {
+internal fun newStage(profileTargetWeightG: Double = ProfileConstraints.DEFAULT_TARGET_WEIGHT_G): ProfileStage {
+    val targetWeight = profileTargetWeightG.coerceAtLeast(ProfileConstraints.MIN_TARGET_WEIGHT_G)
+    return ProfileStage(
+        name = "Pressure Curve",
+        type = StageType.PRESSURE_CURVE,
+        pressureCurve = PressureCurveConfig(
+            axis = PressureCurveAxis.WEIGHT,
+            points = defaultPressurePoints(),
+            maxWeightG = targetWeight,
+            maxPressureBar = 9.0
+        ),
+        exit = ExitCondition(weightGte = targetWeight),
+        safety = StageSafety(maxStageTimeMs = ProfileConstraints.DEFAULT_MAX_SHOT_TIME_MS)
+    )
+}
+
+internal fun ProfileStage.withTypeDefaults(
+    newType: StageType,
+    profileTargetWeightG: Double = ProfileConstraints.DEFAULT_TARGET_WEIGHT_G
+): ProfileStage {
+    val targetWeight = profileTargetWeightG.coerceAtLeast(ProfileConstraints.MIN_TARGET_WEIGHT_G)
     return when (newType) {
         StageType.FIXED_PRESSURE -> copy(
             type = newType,
@@ -38,19 +62,27 @@ internal fun ProfileStage.withTypeDefaults(newType: StageType): ProfileStage {
             correctionIntervalMs = correctionIntervalMs ?: 600L,
             pressureStepMultiplierMax = pressureStepMultiplierMax ?: 8.0
         )
-        StageType.WEIGHT_BASED_PRESSURE_RAMP -> copy(
-            type = newType,
-            rampStartPressureBar = rampStartPressureBar ?: 2.0,
-            rampEndPressureBar = rampEndPressureBar ?: 5.0,
-            rampStartWeightG = rampStartWeightG ?: 0.0,
-            rampEndWeightG = rampEndWeightG ?: 36.0
-        )
-        StageType.TIME_BASED_PRESSURE_RAMP -> copy(
-            type = newType,
-            rampStartPressureBar = rampStartPressureBar ?: 2.0,
-            rampEndPressureBar = rampEndPressureBar ?: 8.0,
-            rampDurationMs = rampDurationMs ?: 4_000L
-        )
+        StageType.WEIGHT_BASED_PRESSURE_RAMP -> {
+            val endWeight = rampEndWeightG ?: targetWeight
+            copy(
+                type = newType,
+                rampStartPressureBar = rampStartPressureBar ?: 2.0,
+                rampEndPressureBar = rampEndPressureBar ?: 5.0,
+                rampStartWeightG = rampStartWeightG ?: 0.0,
+                rampEndWeightG = endWeight,
+                exit = ExitCondition(weightGte = endWeight)
+            )
+        }
+        StageType.TIME_BASED_PRESSURE_RAMP -> {
+            val duration = rampDurationMs ?: 4_000L
+            copy(
+                type = newType,
+                rampStartPressureBar = rampStartPressureBar ?: 2.0,
+                rampEndPressureBar = rampEndPressureBar ?: 8.0,
+                rampDurationMs = duration,
+                exit = ExitCondition(stageTimeGteMs = duration)
+            )
+        }
         StageType.YIELD_TIME_TRAJECTORY -> {
             // A fresh yield/time stage gets a modest extraction floor on by default — a 0-bar tail
             // under-extracts (sour), so this is a better out-of-the-box recipe.
@@ -69,7 +101,11 @@ internal fun ProfileStage.withTypeDefaults(newType: StageType): ProfileStage {
             )
         }
         StageType.PRESSURE_CURVE -> {
-            val cfg = pressureCurve ?: PressureCurveConfig(points = defaultPressurePoints())
+            val cfg = pressureCurve ?: PressureCurveConfig(
+                axis = PressureCurveAxis.WEIGHT,
+                points = defaultPressurePoints(),
+                maxWeightG = targetWeight
+            )
             copy(
                 type = newType,
                 pressureCurve = cfg,
@@ -85,6 +121,19 @@ internal fun ProfileStage.withTypeDefaults(newType: StageType): ProfileStage {
     }
 }
 
+internal val primaryStageTypes: List<StageType> = listOf(
+    StageType.FIXED_PRESSURE,
+    StageType.PRESSURE_CURVE,
+    StageType.FLOW_LIMITED_PRESSURE
+)
+
+internal val advancedStageTypes: List<StageType> = listOf(
+    StageType.YIELD_TIME_TRAJECTORY,
+    StageType.TIME_BASED_PRESSURE_RAMP,
+    StageType.WEIGHT_BASED_PRESSURE_RAMP,
+    StageType.STOP
+)
+
 internal fun StageType.shortName(): String {
     return when (this) {
         StageType.FIXED_PRESSURE -> "Fixed"
@@ -92,7 +141,7 @@ internal fun StageType.shortName(): String {
         StageType.WEIGHT_BASED_PRESSURE_RAMP -> "Weight Ramp"
         StageType.TIME_BASED_PRESSURE_RAMP -> "Time Ramp"
         StageType.YIELD_TIME_TRAJECTORY -> "Yield/Time"
-        StageType.PRESSURE_CURVE -> "Pressure Curve"
+        StageType.PRESSURE_CURVE -> "Pressure curve"
         StageType.STOP -> "Stop"
     }
 }
@@ -152,4 +201,10 @@ internal fun <T> List<T>.move(from: Int, to: Int): List<T> {
     val value = mutable.removeAt(from)
     mutable.add(to, value)
     return mutable
+}
+
+private fun uniqueName(baseName: String, existingNames: Set<String>): String {
+    return generateSequence(0) { it + 1 }
+        .map { index -> if (index == 0) baseName else "$baseName $index" }
+        .first { it !in existingNames }
 }

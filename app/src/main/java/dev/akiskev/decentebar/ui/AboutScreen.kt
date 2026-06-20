@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -22,9 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-
-private const val PAYPAL_DONATION_URL =
-    "https://www.paypal.com/donate/?business=akiskev%40gmail.com&item_name=Decent%20E-Bar&currency_code=USD"
 
 @Composable
 internal fun AboutScreen(
@@ -41,7 +39,7 @@ internal fun AboutScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Decent E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("v0.0.4.2", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("v0.0.5.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Automates espresso pressure profiling on the Decent E-Bar by reading live weight and flow via Android Accessibility and sliding the pressure bar to precise positions.",
@@ -89,11 +87,15 @@ internal fun AboutScreen(
                     "Donations help support continued development and testing.",
                     style = MaterialTheme.typography.bodySmall
                 )
-                TextButton(
-                    onClick = { uriHandler.openUri(PAYPAL_DONATION_URL) },
-                    contentPadding = PaddingValues(0.dp)
+                OutlinedButton(
+                    onClick = { uriHandler.openUri(PAYPAL_DONATION_URL) }
                 ) {
-                    Text("Donate with PayPal", style = MaterialTheme.typography.bodySmall)
+                    Text("Donate with PayPal")
+                }
+                OutlinedButton(
+                    onClick = { uriHandler.openUri(KOFI_DONATION_URL) }
+                ) {
+                    Text("Donate with Ko-fi")
                 }
             }
         }

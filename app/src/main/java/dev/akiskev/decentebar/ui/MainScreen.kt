@@ -1,6 +1,7 @@
 package dev.akiskev.decentebar.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -11,10 +12,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
@@ -29,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
@@ -48,7 +53,9 @@ fun MainScreen(
     disconnectScale: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val uriHandler = LocalUriHandler.current
     var selectedTab by remember { mutableStateOf(AppTab.CONTROL) }
+    var supportMenuExpanded by remember { mutableStateOf(false) }
 
     // LUT and Debug are developer-only tabs. If dev mode is turned off while one is selected,
     // fall back to Control so we never render a tab that has no rail entry.
@@ -81,6 +88,33 @@ fun MainScreen(
                             label = { Text(tab.label) },
                             selected = selectedTab == tab,
                             onClick = { selectedTab = tab }
+                        )
+                    }
+                }
+                Box {
+                    NavigationRailItem(
+                        icon = { Icon(Icons.Default.Favorite, contentDescription = "Support") },
+                        label = { Text("Support") },
+                        selected = false,
+                        onClick = { supportMenuExpanded = true }
+                    )
+                    DropdownMenu(
+                        expanded = supportMenuExpanded,
+                        onDismissRequest = { supportMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("PayPal") },
+                            onClick = {
+                                supportMenuExpanded = false
+                                uriHandler.openUri(PAYPAL_DONATION_URL)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Ko-fi") },
+                            onClick = {
+                                supportMenuExpanded = false
+                                uriHandler.openUri(KOFI_DONATION_URL)
+                            }
                         )
                     }
                 }

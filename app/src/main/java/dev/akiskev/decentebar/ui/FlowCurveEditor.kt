@@ -96,7 +96,7 @@ internal fun CurveEditorContent(
     var points by remember { mutableStateOf(CurveMath.cleanKnots(initialPoints)) }
     var xMax by remember { mutableStateOf(initialXMax.coerceAtLeast(1.0)) }
     var yMax by remember { mutableStateOf(initialYMax.coerceAtLeast(0.5)) }
-    var mode by remember { mutableStateOf(CurveMode.FREEHAND) }
+    var mode by remember { mutableStateOf(CurveMode.EDIT) }
     var activePoint by remember { mutableStateOf<Int?>(null) }
     val undo = remember { mutableStateListOf<List<CurvePoint>>() }
     val stroke = remember { mutableStateListOf<Offset>() }
@@ -105,7 +105,7 @@ internal fun CurveEditorContent(
     // text primitive without a TextMeasurer; the native canvas is simplest and matches the MP4 path).
     val labelPaint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
     labelPaint.color = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
-    labelPaint.textSize = with(density) { 10f.sp.toPx() }
+    labelPaint.textSize = with(density) { 12f.sp.toPx() }
     val labelBg = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
 
     fun commit(next: List<CurvePoint>) {
@@ -441,11 +441,14 @@ private fun DrawScope.drawCurve(
         labelPaint.textAlign = Paint.Align.LEFT
         val ts = labelPaint.textSize
         val tw = labelPaint.measureText(text)
-        val pad = 4f
-        var tx = c.x + handleR + 6f
-        var ty = c.y - handleR - 6f
-        if (tx + tw + pad > plotR) tx = c.x - handleR - 6f - tw
-        if (ty - ts < plotT) ty = c.y + handleR + 6f + ts
+        val pad = 6f
+        val gap = handleR * 5f
+        var tx = c.x + gap
+        var ty = c.y - gap
+        if (tx + tw + pad > plotR) tx = c.x - gap - tw
+        if (ty - ts - pad < plotT) ty = c.y + gap + ts
+        if (ty + pad > plotB) ty = plotB - pad
+        if (tx - pad < plotL) tx = plotL + pad
         drawRect(labelBg, topLeft = Offset(tx - pad, ty - ts - pad), size = Size(tw + pad * 2, ts + pad * 2))
         drawContext.canvas.nativeCanvas.drawText(text, tx, ty, labelPaint)
     }

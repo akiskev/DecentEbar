@@ -50,19 +50,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.akiskev.decentebar.engine.CurveMath
 import dev.akiskev.decentebar.model.CurvePoint
-import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.ExitCondition
 import dev.akiskev.decentebar.model.ExitMode
 import dev.akiskev.decentebar.model.FeedForwardConfig
 import dev.akiskev.decentebar.model.FlowCurveType
+import dev.akiskev.decentebar.model.ProfileConstraints
+import dev.akiskev.decentebar.model.ProfileValidator
 import dev.akiskev.decentebar.model.PressureCurveAxis
 import dev.akiskev.decentebar.model.PressureCurveConfig
 import dev.akiskev.decentebar.model.ProfileStage
+import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.StageSafety
 import dev.akiskev.decentebar.model.StageType
 import dev.akiskev.decentebar.model.TastePriorityMode
@@ -72,7 +75,10 @@ import dev.akiskev.decentebar.util.formatDecimals
 @Composable
 internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
     val context = LocalContext.current
-    var editedProfile by remember(state.selectedProfile) { mutableStateOf(state.selectedProfile) }
+    val focusManager = LocalFocusManager.current
+    var editedProfile by remember(state.selectedProfile) {
+        mutableStateOf(ProfileConstraints.normalize(state.selectedProfile))
+    }
     var importText by remember { mutableStateOf("") }
     var exportText by remember { mutableStateOf("") }
     var showProfilePanel by remember { mutableStateOf(false) }
@@ -81,6 +87,29 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
     // here (not in a Dialog) so the editor uses the real screen width — a Dialog window gets
     // width-clipped in landscape.
     var curveEditorIndex by remember { mutableStateOf<Int?>(null) }
+    val validationErrors = ProfileValidator.validate(editedProfile)
+    val isDirty = editedProfile != state.selectedProfile
+
+    fun updateEdited(next: ShotProfile) {
+        editedProfile = ProfileConstraints.normalize(next)
+    }
+
+    fun currentDraft(): ShotProfile {
+        focusManager.clearFocus(force = true)
+        val draft = ProfileConstraints.normalize(editedProfile)
+        editedProfile = draft
+        return draft
+    }
+
+    fun saveDraft() {
+        viewModel.saveProfile(currentDraft())
+    }
+
+    fun exportDraft(): String {
+        val json = viewModel.profileJson(currentDraft())
+        if (json.isNotBlank()) exportText = json
+        return json
+    }
 
     LaunchedEffect(state.exportedProfileJson) {
         if (state.exportedProfileJson.isNotBlank()) exportText = state.exportedProfileJson
@@ -132,7 +161,7 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                                     selected = profile.name == state.selectedProfile.name,
                                     onClick = {
                                         viewModel.selectProfile(profile.name)
-                                        editedProfile = profile
+                                        updateEdited(profile)
                                     },
                                     label = { Text(profile.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                     modifier = Modifier.fillMaxWidth()
@@ -140,15 +169,31 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                             }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = { viewModel.saveProfile(editedProfile) }) { Text("Save") }
+                            Button(onClick = { saveDraft() }, enabled = validationErrors.isEmpty()) { Text("Save") }
                             OutlinedButton(onClick = viewModel::duplicateSelectedProfile) { Text("Dup") }
                             OutlinedButton(onClick = viewModel::deleteSelectedProfile) { Text("Del") }
-                            OutlinedButton(onClick = viewModel::exportSelectedProfile) { Text("Export") }
+                            OutlinedButton(onClick = { exportDraft() }, enabled = validationErrors.isEmpty()) { Text("Export") }
                         }
                         OutlinedButton(
-                            onClick = { editedProfile = DefaultProfiles.flow33Dark.copy(name = "New Profile") },
+                            onClick = {
+                                updateEdited(newPressureCurveProfile(state.profiles.map { it.name }.toSet()))
+                                viewModel.setProfileMessage("New profile draft")
+                            },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("New Profile") }
+                        Text(
+                            when {
+                                validationErrors.isNotEmpty() -> validationErrors.first()
+                                isDirty -> "Unsaved changes"
+                                else -> "Saved profile selected"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (validationErrors.isNotEmpty()) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.outline
+                            }
+                        )
                         MessageLine(state.profileMessage)
                     }
                 }
@@ -157,7 +202,7 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                     Panel("Profile Settings") {
                         OutlinedTextField(
                             value = editedProfile.name,
-                            onValueChange = { editedProfile = editedProfile.copy(name = it) },
+                            onValueChange = { updateEdited(editedProfile.copy(name = it)) },
                             label = { Text("Name") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
@@ -165,26 +210,36 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                         SliderField(
                             label = "Target weight",
                             value = editedProfile.targetWeightG,
-                            valueRange = 0f..120f,
-                            steps = 239,
+                            valueRange = 1f..120f,
+                            steps = 238,
                             unit = "g",
-                            onChange = { editedProfile = editedProfile.copy(targetWeightG = it) }
+                            onChange = { updateEdited(editedProfile.copy(targetWeightG = it)) }
                         )
+                        val stopOffsetMax = minOf(5.0, editedProfile.targetWeightG - ProfileConstraints.MIN_TARGET_WEIGHT_G)
+                            .coerceAtLeast(ProfileConstraints.MIN_TARGET_WEIGHT_G)
                         SliderField(
                             label = "Stop offset",
                             value = editedProfile.stopOffsetG,
-                            valueRange = 0f..5f,
-                            steps = 49,
+                            valueRange = 0f..stopOffsetMax.toFloat(),
+                            steps = 0,
                             unit = "g",
-                            onChange = { editedProfile = editedProfile.copy(stopOffsetG = it) }
+                            onChange = { updateEdited(editedProfile.copy(stopOffsetG = it)) }
                         )
-                        SliderLongField(
+                        val minShotTimeS = maxOf(
+                            1f,
+                            ProfileConstraints.configuredStageMaxTimeMs(editedProfile) / 1000f
+                        )
+                        SliderDurationField(
                             label = "Max shot time",
-                            value = editedProfile.maxShotTimeMs,
-                            valueRange = 0f..120000f,
-                            steps = 119,
-                            unit = "ms",
-                            onChange = { editedProfile = editedProfile.copy(maxShotTimeMs = it) }
+                            valueMs = editedProfile.maxShotTimeMs,
+                            valueRangeSeconds = minShotTimeS..maxOf(120f, minShotTimeS),
+                            steps = 0,
+                            onChange = { updateEdited(editedProfile.copy(maxShotTimeMs = it)) }
+                        )
+                        Text(
+                            "Stops at ${(editedProfile.targetWeightG - editedProfile.stopOffsetG).formatDecimals(1)} g",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
                         )
                     }
                 }
@@ -199,9 +254,12 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
-                                pendingProfileJson = viewModel.selectedProfileJson()
-                                saveProfileLauncher.launch("${sanitizeFilename(state.selectedProfile.name)}.json")
-                            }) { Text("Save to File") }
+                                val json = exportDraft()
+                                if (json.isNotBlank()) {
+                                    pendingProfileJson = json
+                                    saveProfileLauncher.launch("${sanitizeFilename(editedProfile.name)}.json")
+                                }
+                            }, enabled = validationErrors.isEmpty()) { Text("Save to File") }
                             OutlinedButton(onClick = {
                                 loadProfileLauncher.launch(arrayOf("application/json", "*/*"))
                             }) { Text("Load from File") }
@@ -248,7 +306,7 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                     Text("Stages", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     if (!showProfilePanel) {
                         Text(
-                            "· ${state.selectedProfile.name}",
+                            "· ${editedProfile.name}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -256,12 +314,30 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!showProfilePanel) {
-                        Button(onClick = { viewModel.saveProfile(editedProfile) }) { Text("Save") }
+                        Button(onClick = { saveDraft() }, enabled = validationErrors.isEmpty()) { Text("Save") }
                     }
                     OutlinedButton(onClick = {
-                        editedProfile = editedProfile.copy(stages = editedProfile.stages + newStage())
+                        updateEdited(
+                            editedProfile.copy(stages = editedProfile.stages + newStage(editedProfile.targetWeightG))
+                        )
                     }) { Text("Add Stage") }
                 }
+            }
+            if (!showProfilePanel) {
+                Text(
+                    when {
+                        validationErrors.isNotEmpty() -> validationErrors.first()
+                        isDirty -> "Unsaved changes"
+                        else -> "Saved profile selected"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (validationErrors.isNotEmpty()) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
             }
             if (state.profileMessage.isNotBlank()) {
                 Text(
@@ -280,30 +356,37 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                     StageEditor(
                         index = index,
                         stage = editedProfile.stages[index],
+                        profileTargetWeightG = editedProfile.targetWeightG,
+                        remainingYieldG = ProfileConstraints.maxYieldForStage(editedProfile, index),
                         canMoveUp = index > 0,
                         canMoveDown = index < editedProfile.stages.lastIndex,
                         onStageChange = { updated ->
-                            editedProfile = editedProfile.copy(
-                                stages = editedProfile.stages.replaceAt(index, updated)
+                            updateEdited(
+                                editedProfile.copy(
+                                    stages = editedProfile.stages.replaceAt(index, updated)
+                                )
                             )
-                        },
-                        onProfileTargetWeight = { w ->
-                            editedProfile = editedProfile.copy(targetWeightG = w)
                         },
                         onEditCurve = { curveEditorIndex = index },
                         onRemove = {
-                            editedProfile = editedProfile.copy(
-                                stages = editedProfile.stages.removeAt(index)
+                            updateEdited(
+                                editedProfile.copy(
+                                    stages = editedProfile.stages.removeAt(index)
+                                )
                             )
                         },
                         onMoveUp = {
-                            editedProfile = editedProfile.copy(
-                                stages = editedProfile.stages.move(index, index - 1)
+                            updateEdited(
+                                editedProfile.copy(
+                                    stages = editedProfile.stages.move(index, index - 1)
+                                )
                             )
                         },
                         onMoveDown = {
-                            editedProfile = editedProfile.copy(
-                                stages = editedProfile.stages.move(index, index + 1)
+                            updateEdited(
+                                editedProfile.copy(
+                                    stages = editedProfile.stages.move(index, index + 1)
+                                )
                             )
                         }
                     )
@@ -330,17 +413,26 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                     initialMaxFlowGps = yt.maxFlowGps,
                     onCancel = { curveEditorIndex = null },
                     onConfirm = { pts, computedYield, dur, mf ->
-                        editedProfile = editedProfile.copy(
-                            targetWeightG = computedYield,
-                            stages = editedProfile.stages.replaceAt(
-                                editIdx,
-                                st.copy(
-                                    yieldTime = yt.copy(
-                                        curveType = FlowCurveType.CUSTOM_POINTS,
-                                        customPoints = pts,
-                                        targetYieldG = computedYield,
-                                        targetDurationS = dur,
-                                        maxFlowGps = mf
+                        val yieldBudget = ProfileConstraints.maxYieldForStage(editedProfile, editIdx)
+                        val scale = if (computedYield > yieldBudget && computedYield > 0.0) {
+                            yieldBudget / computedYield
+                        } else {
+                            1.0
+                        }
+                        val finalPts = pts.map { it.copy(flowGps = it.flowGps * scale) }
+                        val finalYield = computedYield * scale
+                        updateEdited(
+                            editedProfile.copy(
+                                stages = editedProfile.stages.replaceAt(
+                                    editIdx,
+                                    st.copy(
+                                        yieldTime = yt.copy(
+                                            curveType = FlowCurveType.CUSTOM_POINTS,
+                                            customPoints = finalPts,
+                                            targetYieldG = finalYield,
+                                            targetDurationS = dur,
+                                            maxFlowGps = mf * scale
+                                        )
                                     )
                                 )
                             )
@@ -356,15 +448,27 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                     initialMaxPressureBar = pc.maxPressureBar,
                     onCancel = { curveEditorIndex = null },
                     onConfirm = { pts, xMax, maxBar ->
-                        editedProfile = editedProfile.copy(
-                            stages = editedProfile.stages.replaceAt(
-                                editIdx,
-                                st.copy(
-                                    pressureCurve = pc.copy(
-                                        points = pts,
-                                        maxPressureBar = maxBar,
-                                        durationS = if (pc.axis == PressureCurveAxis.TIME) xMax else pc.durationS,
-                                        maxWeightG = if (pc.axis == PressureCurveAxis.WEIGHT) xMax else pc.maxWeightG
+                        val finalMaxBar = maxBar.coerceIn(ProfileConstraints.MIN_POSITIVE, ProfileConstraints.MAX_PRESSURE_BAR)
+                        val finalMinBar = pc.minPressureBar.coerceIn(0.0, finalMaxBar)
+                        val finalPts = pts.map {
+                            it.copy(pressureBar = it.pressureBar.coerceIn(finalMinBar, finalMaxBar))
+                        }
+                        updateEdited(
+                            editedProfile.copy(
+                                stages = editedProfile.stages.replaceAt(
+                                    editIdx,
+                                    st.copy(
+                                        pressureCurve = pc.copy(
+                                            points = finalPts,
+                                            maxPressureBar = finalMaxBar,
+                                            minPressureBar = finalMinBar,
+                                            durationS = if (pc.axis == PressureCurveAxis.TIME) xMax else pc.durationS,
+                                            maxWeightG = if (pc.axis == PressureCurveAxis.WEIGHT) {
+                                                xMax.coerceAtMost(editedProfile.targetWeightG)
+                                            } else {
+                                                pc.maxWeightG
+                                            }
+                                        )
                                     )
                                 )
                             )
@@ -383,16 +487,18 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
 private fun StageEditor(
     index: Int,
     stage: ProfileStage,
+    profileTargetWeightG: Double,
+    remainingYieldG: Double,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onStageChange: (ProfileStage) -> Unit,
-    onProfileTargetWeight: (Double) -> Unit,
     onEditCurve: () -> Unit,
     onRemove: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var showAdvancedTypes by remember { mutableStateOf(false) }
 
     val cardColor = if (index % 2 == 0) MaterialTheme.colorScheme.surfaceContainer
                     else MaterialTheme.colorScheme.surfaceContainerHigh
@@ -467,14 +573,17 @@ private fun StageEditor(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    StageType.entries.forEach { type ->
+                    val visibleStageTypes = primaryStageTypes +
+                        if (showAdvancedTypes) advancedStageTypes else advancedStageTypes.filter { it == stage.type }
+                    visibleStageTypes.distinct().forEach { type ->
                         FilterChip(
                             selected = stage.type == type,
-                            onClick = { onStageChange(stage.withTypeDefaults(type)) },
+                            onClick = { onStageChange(stage.withTypeDefaults(type, profileTargetWeightG)) },
                             label = { Text(type.shortName()) }
                         )
                     }
                 }
+                LabeledSwitch("Advanced types", showAdvancedTypes) { showAdvancedTypes = it }
 
                 when (stage.type) {
                     StageType.FIXED_PRESSURE -> {
@@ -504,21 +613,25 @@ private fun StageEditor(
                             unit = "g/s",
                             onChange = { onStageChange(stage.copy(targetFlowGps = it)) }
                         )
-                        val feedForwardOn = stage.feedForward != null
-                        LabeledSwitch("Resistance feed-forward", feedForwardOn) { on ->
-                            onStageChange(stage.copy(feedForward = if (on) FeedForwardConfig() else null))
+                        var showFlowAdvanced by remember { mutableStateOf(false) }
+                        LabeledSwitch("Advanced", showFlowAdvanced) { showFlowAdvanced = it }
+                        AnimatedVisibility(visible = showFlowAdvanced) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val feedForwardOn = stage.feedForward != null
+                                LabeledSwitch("Resistance feed-forward", feedForwardOn) { on ->
+                                    onStageChange(stage.copy(feedForward = if (on) FeedForwardConfig() else null))
+                                }
+                                Text(
+                                    if (feedForwardOn) {
+                                        "Feed-forward: commands pressure from learned puck resistance with gusher-safe recovery."
+                                    } else {
+                                        "Legacy auto-tune: deadband, step and correction interval are auto-tuned."
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
                         }
-                        Text(
-                            if (feedForwardOn) {
-                                "Feed-forward (experimental): commands pressure from the puck's" +
-                                    " learned resistance, with gusher-safe recovery. Tuning via JSON import."
-                            } else {
-                                "Legacy auto-tune: deadband, step and correction interval are auto-tuned" +
-                                    " (faster with BLE scale). Override via JSON import."
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
                     }
                     StageType.WEIGHT_BASED_PRESSURE_RAMP -> {
                         SliderField(
@@ -540,16 +653,16 @@ private fun StageEditor(
                         SliderField(
                             label = "Start weight",
                             value = stage.rampStartWeightG ?: 0.0,
-                            valueRange = 0f..120f,
-                            steps = 239,
+                            valueRange = 0f..profileTargetWeightG.toFloat(),
+                            steps = 0,
                             unit = "g",
                             onChange = { onStageChange(stage.copy(rampStartWeightG = it)) }
                         )
                         SliderField(
                             label = "End weight",
-                            value = stage.rampEndWeightG ?: 36.0,
-                            valueRange = 0f..120f,
-                            steps = 239,
+                            value = stage.rampEndWeightG ?: profileTargetWeightG,
+                            valueRange = 0f..profileTargetWeightG.toFloat(),
+                            steps = 0,
                             unit = "g",
                             onChange = { onStageChange(stage.copy(rampEndWeightG = it)) }
                         )
@@ -571,12 +684,11 @@ private fun StageEditor(
                             unit = "bar",
                             onChange = { onStageChange(stage.copy(rampEndPressureBar = it)) }
                         )
-                        SliderLongField(
+                        SliderDurationField(
                             label = "Duration",
-                            value = stage.rampDurationMs ?: 4000L,
-                            valueRange = 0f..30000f,
-                            steps = 59,
-                            unit = "ms",
+                            valueMs = stage.rampDurationMs ?: 4000L,
+                            valueRangeSeconds = 1f..30f,
+                            steps = 0,
                             onChange = { onStageChange(stage.copy(rampDurationMs = it)) }
                         )
                     }
@@ -592,10 +704,10 @@ private fun StageEditor(
                             SliderField(
                                 label = "Stage yield",
                                 value = yt.targetYieldG,
-                                valueRange = 0f..80f,
-                                steps = 159,
+                                valueRange = ProfileConstraints.MIN_TARGET_WEIGHT_G.toFloat()..remainingYieldG.toFloat(),
+                                steps = 0,
                                 unit = "g",
-                                onChange = { v -> updateYt { it.copy(targetYieldG = v) } }
+                                onChange = { v -> updateYt { it.copy(targetYieldG = v.coerceAtMost(remainingYieldG)) } }
                             )
                             SliderField(
                                 label = "Target time",
@@ -725,15 +837,14 @@ private fun StageEditor(
                             onChange = { v -> updateYt { it.copy(minExtractionPressureBar = v) } }
                         )
 
-                        val feedForwardOn = yt.feedForward != null
-                        LabeledSwitch("Resistance feed-forward", feedForwardOn) { on ->
-                            updateYt { it.copy(feedForward = if (on) FeedForwardConfig() else null) }
-                        }
-
                         var showAdvanced by remember { mutableStateOf(false) }
                         LabeledSwitch("Advanced", showAdvanced) { showAdvanced = it }
                         AnimatedVisibility(visible = showAdvanced) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val feedForwardOn = yt.feedForward != null
+                                LabeledSwitch("Resistance feed-forward", feedForwardOn) { on ->
+                                    updateYt { it.copy(feedForward = if (on) FeedForwardConfig() else null) }
+                                }
                                 if (yt.curveType != FlowCurveType.CUSTOM_POINTS) {
                                 SliderField(
                                     label = "Start flow",
@@ -822,7 +933,11 @@ private fun StageEditor(
                         )
                     }
                     StageType.PRESSURE_CURVE -> {
-                        val pc = stage.pressureCurve ?: PressureCurveConfig()
+                        val pc = stage.pressureCurve ?: PressureCurveConfig(
+                            axis = PressureCurveAxis.WEIGHT,
+                            points = defaultPressurePoints(),
+                            maxWeightG = profileTargetWeightG
+                        )
                         fun updatePc(block: (PressureCurveConfig) -> PressureCurveConfig) {
                             onStageChange(stage.copy(pressureCurve = block(pc)))
                         }
@@ -835,12 +950,28 @@ private fun StageEditor(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilterChip(
                                 selected = pc.axis == PressureCurveAxis.TIME,
-                                onClick = { updatePc { it.copy(axis = PressureCurveAxis.TIME) } },
+                                onClick = {
+                                    val next = pc.copy(axis = PressureCurveAxis.TIME)
+                                    onStageChange(
+                                        stage.copy(
+                                            pressureCurve = next,
+                                            exit = ExitCondition(stageTimeGteMs = (next.durationS * 1000).toLong())
+                                        )
+                                    )
+                                },
                                 label = { Text("Time") }
                             )
                             FilterChip(
                                 selected = pc.axis == PressureCurveAxis.WEIGHT,
-                                onClick = { updatePc { it.copy(axis = PressureCurveAxis.WEIGHT) } },
+                                onClick = {
+                                    val next = pc.copy(axis = PressureCurveAxis.WEIGHT)
+                                    onStageChange(
+                                        stage.copy(
+                                            pressureCurve = next,
+                                            exit = ExitCondition(weightGte = next.maxWeightG.coerceAtMost(profileTargetWeightG))
+                                        )
+                                    )
+                                },
                                 label = { Text("Weight") }
                             )
                         }
@@ -859,11 +990,19 @@ private fun StageEditor(
                             SliderField(
                                 label = "Max weight",
                                 value = pc.maxWeightG,
-                                valueRange = 10f..120f,
+                                valueRange = ProfileConstraints.MIN_TARGET_WEIGHT_G.toFloat()..profileTargetWeightG.toFloat(),
                                 steps = 0,
                                 unit = "g",
                                 decimals = 0,
-                                onChange = { v -> updatePc { it.copy(maxWeightG = v) } }
+                                onChange = { v ->
+                                    val capped = v.coerceAtMost(profileTargetWeightG)
+                                    onStageChange(
+                                        stage.copy(
+                                            pressureCurve = pc.copy(maxWeightG = capped),
+                                            exit = stage.exit.copy(weightGte = stage.exit.weightGte?.coerceAtMost(capped))
+                                        )
+                                    )
+                                }
                             )
                         }
                         SliderField(
@@ -914,16 +1053,22 @@ private fun StageEditor(
                     }
                 }
 
-                HorizontalDivider()
-                ExitEditor(stage.exit) { onStageChange(stage.copy(exit = it)) }
-                SafetyEditor(stage.safety) { onStageChange(stage.copy(safety = it)) }
+                if (stage.type != StageType.STOP) {
+                    HorizontalDivider()
+                    ExitEditor(stage.exit, profileTargetWeightG) { onStageChange(stage.copy(exit = it)) }
+                    SafetyEditor(stage.safety) { onStageChange(stage.copy(safety = it)) }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun ExitEditor(exit: ExitCondition, onExitChange: (ExitCondition) -> Unit) {
+private fun ExitEditor(
+    exit: ExitCondition,
+    profileTargetWeightG: Double,
+    onExitChange: (ExitCondition) -> Unit
+) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
@@ -946,31 +1091,24 @@ private fun ExitEditor(exit: ExitCondition, onExitChange: (ExitCondition) -> Uni
                 LabeledSwitch("First drop", exit.firstDropDetected) {
                     onExitChange(exit.copy(firstDropDetected = it))
                 }
-                LabeledSwitch("Manual skip", exit.manualSkip) {
-                    onExitChange(exit.copy(manualSkip = it))
-                }
-                LabeledSwitch("Safety timeout", exit.safetyTimeout) {
-                    onExitChange(exit.copy(safetyTimeout = it))
-                }
             }
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OptionalSliderField(
                     label = "Weight >=",
                     value = exit.weightGte,
-                    valueRange = 0f..120f,
-                    steps = 239,
+                    valueRange = 0f..profileTargetWeightG.toFloat(),
+                    steps = 0,
                     unit = "g",
-                    defaultValue = 1.0,
+                    defaultValue = profileTargetWeightG,
                     labelWidth = 80.dp,
                     onChange = { onExitChange(exit.copy(weightGte = it)) }
                 )
-                OptionalSliderLongField(
+                OptionalSliderDurationField(
                     label = "Stage time >=",
-                    value = exit.stageTimeGteMs,
-                    valueRange = 0f..60000f,
-                    steps = 119,
-                    unit = "ms",
-                    defaultValue = 5000L,
+                    valueMs = exit.stageTimeGteMs,
+                    valueRangeSeconds = 1f..120f,
+                    steps = 0,
+                    defaultValueMs = 5_000L,
                     labelWidth = 80.dp,
                     onChange = { onExitChange(exit.copy(stageTimeGteMs = it)) }
                 )
@@ -1006,13 +1144,12 @@ private fun SafetyEditor(safety: StageSafety, onSafetyChange: (StageSafety) -> U
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        OptionalSliderLongField(
+        OptionalSliderDurationField(
             label = "Stage max time",
-            value = safety.maxStageTimeMs,
-            valueRange = 0f..60000f,
-            steps = 119,
-            unit = "ms",
-            defaultValue = 20_000L,
+            valueMs = safety.maxStageTimeMs,
+            valueRangeSeconds = 1f..120f,
+            steps = 0,
+            defaultValueMs = 20_000L,
             modifier = Modifier.weight(1f),
             onChange = { onSafetyChange(safety.copy(maxStageTimeMs = it)) }
         )

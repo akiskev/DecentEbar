@@ -68,7 +68,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val profiles = profileRepository.loadProfiles()
-        val selected = profiles.firstOrNull() ?: DefaultProfiles.flow33Dark
+        val selected = profiles.firstOrNull() ?: DefaultProfiles.fallbackProfile
         val (initW, initH) = screenSizePx(application)
         val lut = BuiltInPressureLut.buildFor(initW, initH)
         _uiState.update {
@@ -309,7 +309,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 profiles = profiles,
-                selectedProfile = profiles.first(),
+                selectedProfile = profiles.firstOrNull() ?: DefaultProfiles.fallbackProfile,
                 profileMessage = "Deleted ${state.selectedProfile.name}"
             )
         }
@@ -333,6 +333,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectedProfileJson(): String {
         val profile = _uiState.value.selectedProfile
+        val encoded = profileRepository.exportProfile(profile)
+        _uiState.update {
+            it.copy(exportedProfileJson = encoded, profileMessage = "Exported ${profile.name}")
+        }
+        return encoded
+    }
+
+    fun profileJson(profile: ShotProfile): String {
+        val errors = ProfileValidator.validate(profile)
+        if (errors.isNotEmpty()) {
+            _uiState.update { it.copy(profileMessage = errors.joinToString("; ")) }
+            return ""
+        }
         val encoded = profileRepository.exportProfile(profile)
         _uiState.update {
             it.copy(exportedProfileJson = encoded, profileMessage = "Exported ${profile.name}")

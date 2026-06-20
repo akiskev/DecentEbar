@@ -44,6 +44,12 @@ internal fun SliderField(
 ) {
     var localText by remember { mutableStateOf(value.format(decimals)) }
     var textHasFocus by remember { mutableStateOf(false) }
+    fun commitText(text: String): Boolean {
+        val parsed = text.toDoubleOrNull() ?: return false
+        val clamped = parsed.coerceIn(valueRange.start.toDouble(), valueRange.endInclusive.toDouble())
+        onChange(clamped)
+        return true
+    }
     LaunchedEffect(value) {
         if (!textHasFocus) localText = value.format(decimals)
     }
@@ -62,7 +68,10 @@ internal fun SliderField(
         )
         BasicTextField(
             value = localText,
-            onValueChange = { localText = it },
+            onValueChange = {
+                localText = it
+                commitText(it)
+            },
             singleLine = true,
             textStyle = TextStyle(
                 textAlign = TextAlign.End,
@@ -86,14 +95,11 @@ internal fun SliderField(
                 .onFocusChanged { focusState ->
                     textHasFocus = focusState.isFocused
                     if (!focusState.isFocused) {
-                        val parsed = localText.toDoubleOrNull()
-                        if (parsed != null) {
-                            val clamped = parsed.coerceIn(
-                                valueRange.start.toDouble(),
-                                valueRange.endInclusive.toDouble()
-                            )
-                            onChange(clamped)
-                            localText = clamped.format(decimals)
+                        if (commitText(localText)) {
+                            localText = localText.toDoubleOrNull()
+                                ?.coerceIn(valueRange.start.toDouble(), valueRange.endInclusive.toDouble())
+                                ?.format(decimals)
+                                ?: value.format(decimals)
                         } else {
                             localText = value.format(decimals)
                         }
@@ -117,6 +123,12 @@ internal fun SliderLongField(
 ) {
     var localText by remember { mutableStateOf(value.toString()) }
     var textHasFocus by remember { mutableStateOf(false) }
+    fun commitText(text: String): Boolean {
+        val parsed = text.toLongOrNull() ?: return false
+        val clamped = parsed.coerceIn(valueRange.start.toLong(), valueRange.endInclusive.toLong())
+        onChange(clamped)
+        return true
+    }
     LaunchedEffect(value) {
         if (!textHasFocus) localText = value.toString()
     }
@@ -135,7 +147,10 @@ internal fun SliderLongField(
         )
         BasicTextField(
             value = localText,
-            onValueChange = { localText = it },
+            onValueChange = {
+                localText = it
+                commitText(it)
+            },
             singleLine = true,
             textStyle = TextStyle(
                 textAlign = TextAlign.End,
@@ -159,14 +174,11 @@ internal fun SliderLongField(
                 .onFocusChanged { focusState ->
                     textHasFocus = focusState.isFocused
                     if (!focusState.isFocused) {
-                        val parsed = localText.toLongOrNull()
-                        if (parsed != null) {
-                            val clamped = parsed.coerceIn(
-                                valueRange.start.toLong(),
-                                valueRange.endInclusive.toLong()
-                            )
-                            onChange(clamped)
-                            localText = clamped.toString()
+                        if (commitText(localText)) {
+                            localText = localText.toLongOrNull()
+                                ?.coerceIn(valueRange.start.toLong(), valueRange.endInclusive.toLong())
+                                ?.toString()
+                                ?: value.toString()
                         } else {
                             localText = value.toString()
                         }
@@ -175,6 +187,29 @@ internal fun SliderLongField(
         )
         Text(unit, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(32.dp))
     }
+}
+
+@Composable
+internal fun SliderDurationField(
+    label: String,
+    valueMs: Long,
+    valueRangeSeconds: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    modifier: Modifier = Modifier,
+    labelWidth: Dp = 110.dp,
+    onChange: (Long) -> Unit
+) {
+    SliderField(
+        label = label,
+        value = valueMs / 1000.0,
+        valueRange = valueRangeSeconds,
+        steps = steps,
+        unit = "s",
+        modifier = modifier,
+        labelWidth = labelWidth,
+        decimals = 0,
+        onChange = { onChange((it * 1000.0).roundToLong()) }
+    )
 }
 
 @Composable
@@ -257,6 +292,47 @@ internal fun OptionalSliderLongField(
         } else {
             Text(
                 "$label: —",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+internal fun OptionalSliderDurationField(
+    label: String,
+    valueMs: Long?,
+    valueRangeSeconds: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    defaultValueMs: Long,
+    modifier: Modifier = Modifier,
+    labelWidth: Dp = 130.dp,
+    onChange: (Long?) -> Unit
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Switch(
+            checked = valueMs != null,
+            onCheckedChange = { enabled -> onChange(if (enabled) defaultValueMs else null) }
+        )
+        if (valueMs != null) {
+            SliderDurationField(
+                label = label,
+                valueMs = valueMs,
+                valueRangeSeconds = valueRangeSeconds,
+                steps = steps,
+                modifier = Modifier.weight(1f),
+                labelWidth = labelWidth,
+                onChange = { onChange(it) }
+            )
+        } else {
+            Text(
+                "$label: --",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)

@@ -13,10 +13,11 @@ class ProfileRepository(context: Context) {
     private val json = JsonCodec.json
 
     fun loadProfiles(): List<ShotProfile> {
+        val hasStoredProfiles = prefs.contains(KEY_PROFILES)
         val stored = prefs.getString(KEY_PROFILES, null)
             ?.let { raw -> runCatching { json.decodeFromString<List<ShotProfile>>(raw) }.getOrNull() }
             .orEmpty()
-        return seedBuiltIns(stored)
+        return seedBuiltIns(stored, hasStoredProfiles)
     }
 
     /**
@@ -25,13 +26,15 @@ class ProfileRepository(context: Context) {
      * that changed the bundle — replacing stored profiles with the same name in place and
      * appending the rest. Between bumps, user edits and deletions of built-ins persist.
      */
-    private fun seedBuiltIns(stored: List<ShotProfile>): List<ShotProfile> {
-        if (stored.isNotEmpty() && prefs.getInt(KEY_BUILTINS_VERSION, 0) >= DefaultProfiles.BUILT_INS_VERSION) {
+    private fun seedBuiltIns(stored: List<ShotProfile>, hasStoredProfiles: Boolean): List<ShotProfile> {
+        val builtIns = DefaultProfiles.builtIns
+        if (builtIns.isEmpty()) return stored
+        if (hasStoredProfiles && prefs.getInt(KEY_BUILTINS_VERSION, 0) >= DefaultProfiles.BUILT_INS_VERSION) {
             return stored
         }
-        val byName = DefaultProfiles.builtIns.associateBy { it.name }
+        val byName = builtIns.associateBy { it.name }
         val merged = stored.map { byName[it.name] ?: it } +
-            DefaultProfiles.builtIns.filter { builtIn -> stored.none { it.name == builtIn.name } }
+            builtIns.filter { builtIn -> stored.none { it.name == builtIn.name } }
         saveProfiles(merged)
         prefs.edit().putInt(KEY_BUILTINS_VERSION, DefaultProfiles.BUILT_INS_VERSION).commit()
         return merged
@@ -51,7 +54,6 @@ class ProfileRepository(context: Context) {
 
     fun delete(profileName: String): List<ShotProfile> {
         val next = loadProfiles().filterNot { it.name == profileName }
-            .ifEmpty { listOf(DefaultProfiles.flow33Dark) }
         saveProfiles(next)
         return next
     }
