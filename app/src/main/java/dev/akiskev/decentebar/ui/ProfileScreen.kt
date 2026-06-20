@@ -191,9 +191,11 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
 
                 item {
                     Panel("Profile JSON") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { viewModel.importProfileJson(importText) }) { Text("Import") }
-                            OutlinedButton(onClick = { importText = exportText }) { Text("Use Export") }
+                        if (state.devMode) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { viewModel.importProfileJson(importText) }) { Text("Import") }
+                                OutlinedButton(onClick = { importText = exportText }) { Text("Use Export") }
+                            }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
@@ -204,20 +206,22 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                                 loadProfileLauncher.launch(arrayOf("application/json", "*/*"))
                             }) { Text("Load from File") }
                         }
-                        OutlinedTextField(
-                            value = importText,
-                            onValueChange = { importText = it },
-                            label = { Text("Import JSON") },
-                            minLines = 3,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = exportText,
-                            onValueChange = { exportText = it },
-                            label = { Text("Export JSON") },
-                            minLines = 3,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        if (state.devMode) {
+                            OutlinedTextField(
+                                value = importText,
+                                onValueChange = { importText = it },
+                                label = { Text("Import JSON") },
+                                minLines = 3,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = exportText,
+                                onValueChange = { exportText = it },
+                                label = { Text("Export JSON") },
+                                minLines = 3,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
             }

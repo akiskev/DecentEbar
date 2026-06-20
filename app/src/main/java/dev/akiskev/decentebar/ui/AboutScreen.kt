@@ -3,16 +3,21 @@ package dev.akiskev.decentebar.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
@@ -22,7 +27,10 @@ private const val PAYPAL_DONATION_URL =
     "https://www.paypal.com/donate/?business=akiskev%40gmail.com&item_name=Decent%20E-Bar&currency_code=USD"
 
 @Composable
-internal fun AboutScreen() {
+internal fun AboutScreen(
+    devMode: Boolean,
+    onDevModeChange: (Boolean) -> Unit
+) {
     val uriHandler = LocalUriHandler.current
     LazyColumn(
         modifier = Modifier
@@ -33,7 +41,7 @@ internal fun AboutScreen() {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Decent E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("v0.0.4.1", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("v0.0.4.2", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Automates espresso pressure profiling on the Decent E-Bar by reading live weight and flow via Android Accessibility and sliding the pressure bar to precise positions.",
@@ -87,6 +95,29 @@ internal fun AboutScreen() {
                 ) {
                     Text("Donate with PayPal", style = MaterialTheme.typography.bodySmall)
                 }
+            }
+        }
+        item {
+            HorizontalDivider()
+        }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("Developer Mode", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Reveals advanced tools: the LUT and Debug tabs, raw profile JSON import/export, and the full shot-log export controls.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Spacer(Modifier.width(16.dp))
+                Switch(checked = devMode, onCheckedChange = onDevModeChange)
             }
         }
         item {

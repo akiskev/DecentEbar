@@ -22,6 +22,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +50,14 @@ fun MainScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by remember { mutableStateOf(AppTab.CONTROL) }
 
+    // LUT and Debug are developer-only tabs. If dev mode is turned off while one is selected,
+    // fall back to Control so we never render a tab that has no rail entry.
+    LaunchedEffect(state.devMode) {
+        if (!state.devMode && (selectedTab == AppTab.LUT || selectedTab == AppTab.DEBUG)) {
+            selectedTab = AppTab.CONTROL
+        }
+    }
+
     Scaffold { padding ->
         Row(
             modifier = Modifier
@@ -56,7 +65,10 @@ fun MainScreen(
                 .padding(padding)
         ) {
             NavigationRail {
-                val mainTabs = AppTab.entries.filter { it != AppTab.ABOUT }
+                val mainTabs = AppTab.entries.filter { tab ->
+                    tab != AppTab.ABOUT &&
+                        (state.devMode || (tab != AppTab.LUT && tab != AppTab.DEBUG))
+                }
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -88,7 +100,10 @@ fun MainScreen(
                     AppTab.LUT -> LutScreen(state, viewModel)
                     AppTab.DEBUG -> DebugScreen(state)
                     AppTab.LOG -> LogScreen(state, viewModel)
-                    AppTab.ABOUT -> AboutScreen()
+                    AppTab.ABOUT -> AboutScreen(
+                        devMode = state.devMode,
+                        onDevModeChange = viewModel::setDevMode
+                    )
                 }
             }
         }

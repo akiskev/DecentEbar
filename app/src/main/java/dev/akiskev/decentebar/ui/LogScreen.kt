@@ -167,12 +167,14 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Column(
-            modifier = Modifier.weight(0.5f).fillMaxHeight(),
+            modifier = Modifier.weight(if (state.devMode) 0.5f else 1f).fillMaxHeight(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Panel("Shot Log") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = viewModel::exportShotLog) { Text("Export Log") }
+                    if (state.devMode) {
+                        Button(onClick = viewModel::exportShotLog) { Text("Export Log") }
+                    }
                     OutlinedButton(onClick = {
                         if (state.samples.isEmpty() && state.events.isEmpty()) {
                             viewModel.setLogMessage("No shot data to save")
@@ -180,12 +182,16 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                             showSaveDialog = true
                         }
                     }) { Text("Save to File") }
-                    OutlinedButton(onClick = viewModel::resetShotLog) { Text("Clear") }
+                    if (state.devMode) {
+                        OutlinedButton(onClick = viewModel::resetShotLog) { Text("Clear") }
+                    }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
-                        importLogLauncher.launch(arrayOf("application/json", "text/html", "*/*"))
-                    }) { Text("Load Log") }
+                if (state.devMode) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            importLogLauncher.launch(arrayOf("application/json", "text/html", "*/*"))
+                        }) { Text("Load Log") }
+                    }
                 }
                 Spacer(Modifier.height(4.dp))
                 VideoExportRow(
@@ -212,6 +218,7 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                 }
             }
         }
+        if (state.devMode) {
         Column(
             modifier = Modifier.weight(0.5f).fillMaxHeight(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -268,6 +275,7 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                     modifier = Modifier.fillMaxWidth()
                 )
             }
+        }
         }
     }
 

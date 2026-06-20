@@ -49,6 +49,7 @@ data class ShotMetadata(
  */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val safetyConfig = SafetyConfig()
+    private val settingsPrefs = application.getSharedPreferences("settings", Application.MODE_PRIVATE)
     private val profileRepository = ProfileRepository(application)
     private val lutManager = PressureLutManager(safetyConfig)
     private val flowEstimator = FlowEstimator(safetyConfig.maxFlowGps)
@@ -76,7 +77,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selectedProfile = selected,
                 loadedLut = lut,
                 lutValidation = controller.validateLut(it.snapshot, lut, requireForegroundPackage = false),
-                exportedLutJson = ""
+                exportedLutJson = "",
+                devMode = settingsPrefs.getBoolean(KEY_DEV_MODE, false)
             )
         }
 
@@ -106,6 +108,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         scaleManager.close()
+    }
+
+    // --- Settings ---
+
+    fun setDevMode(enabled: Boolean) {
+        settingsPrefs.edit().putBoolean(KEY_DEV_MODE, enabled).apply()
+        _uiState.update { it.copy(devMode = enabled) }
     }
 
     // --- Shot controls (delegated) ---
@@ -472,5 +481,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val CALIB_TAG = "DecentEbar"
         const val CALIBRATION_HOP_PX = 100f
+        const val KEY_DEV_MODE = "dev_mode"
     }
 }
