@@ -1,28 +1,39 @@
 package dev.akiskev.decentebar.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -33,10 +44,10 @@ internal fun Panel(
     fillContent: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         if (fillContent) {
             Column(Modifier.padding(14.dp).fillMaxSize()) {
@@ -103,8 +114,8 @@ internal fun AccessibilityWarningBanner(onEnable: () -> Unit, modifier: Modifier
 @Composable
 internal fun MetricCell(label: String, value: String, modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = modifier.heightIn(min = 56.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shape = MaterialTheme.shapes.small
     ) {
         Column(Modifier.padding(10.dp)) {
@@ -128,11 +139,56 @@ internal fun LabeledSwitch(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
+        modifier = Modifier.heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(label, style = MaterialTheme.typography.labelSmall)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics { contentDescription = label }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun <T> SegmentedChoice(
+    options: List<T>,
+    selected: T,
+    onSelected: (T) -> Unit,
+    label: (T) -> String,
+    modifier: Modifier = Modifier
+) {
+    if (options.isEmpty()) return
+    val labeledOptions = options.map { option -> option to label(option) }
+    SingleChoiceSegmentedButtonRow(
+        modifier = modifier
+            .horizontalScroll(rememberScrollState())
+            .heightIn(min = 48.dp)
+    ) {
+        labeledOptions.forEachIndexed { index, (option, text) ->
+            SegmentedButton(
+                selected = option == selected,
+                onClick = { onSelected(option) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = MaterialTheme.colorScheme.primary,
+                    activeContentColor = MaterialTheme.colorScheme.onPrimary,
+                    inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    inactiveContentColor = MaterialTheme.colorScheme.onSurface
+                ),
+                modifier = Modifier.widthIn(min = ((text.length * 8) + 40).coerceAtLeast(72).dp),
+                label = {
+                    Text(
+                        text,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            )
+        }
     }
 }
 
@@ -142,14 +198,22 @@ internal fun LabeledSwitch(
  */
 @Composable
 internal fun MetricGrid(metrics: List<Pair<String, String>>, columns: Int = 3) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        metrics.chunked(columns).forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                row.forEach { (label, value) -> MetricCell(label, value, Modifier.weight(1f)) }
-                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+    BoxWithConstraints {
+        val adaptiveColumns = when {
+            maxWidth < 360.dp -> 1
+            maxWidth < 680.dp -> minOf(columns, 2)
+            else -> columns
+        }.coerceAtLeast(1)
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            metrics.chunked(adaptiveColumns).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    row.forEach { (label, value) -> MetricCell(label, value, Modifier.weight(1f)) }
+                    repeat(adaptiveColumns - row.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
         }
     }

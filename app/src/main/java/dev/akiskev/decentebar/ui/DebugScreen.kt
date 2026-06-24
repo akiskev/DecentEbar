@@ -1,14 +1,18 @@
 package dev.akiskev.decentebar.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,22 +55,25 @@ internal fun DebugScreen(state: MainUiState) {
     val scaleConnected = state.scaleConnectionState == ScaleConnectionState.CONNECTED
     val flowDiff = state.currentFlowGps - state.currentCalcFlowGps
 
-    Row(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(12.dp)
     ) {
-        Column(
-            modifier = Modifier.weight(0.5f),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
+        val compact = maxWidth < 900.dp
+
+        @Composable
+        fun StatusPane(modifier: Modifier = Modifier) {
+            Column(
+                modifier = modifier,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
             if (scaleConnected) {
                 Panel("Flow Comparison (Scale vs Software)") {
                     val compMetrics = listOf(
                         "Scale flow" to "${state.currentFlowGps.format(2)} g/s",
                         "Calc flow" to "${state.currentCalcFlowGps.format(2)} g/s",
-                        "Diff (S−C)" to "${if (flowDiff >= 0) "+" else ""}${flowDiff.format(2)} g/s"
+                        "Diff (S-C)" to "${if (flowDiff >= 0) "+" else ""}${flowDiff.format(2)} g/s"
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -85,11 +92,16 @@ internal fun DebugScreen(state: MainUiState) {
                 MetricGrid(anchorMetrics)
             }
         }
-        Column(
-            modifier = Modifier.weight(0.5f).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Panel("Node bounds", modifier = Modifier.weight(1f), fillContent = true) {
+        }
+
+        @Composable
+        fun RawPane(modifier: Modifier = Modifier, weightedPanels: Boolean = true) {
+            Column(
+                modifier = modifier,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+            val panelModifier = if (weightedPanels) Modifier.weight(1f) else Modifier.height(220.dp)
+            Panel("Node bounds", modifier = panelModifier, fillContent = true) {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(state.snapshot.nodes.take(160)) { node ->
                         val tag = node.label ?: node.className?.substringAfterLast('.') ?: "?"
@@ -100,12 +112,33 @@ internal fun DebugScreen(state: MainUiState) {
                     }
                 }
             }
-            Panel("Raw text", modifier = Modifier.weight(1f), fillContent = true) {
+            Panel("Raw text", modifier = panelModifier, fillContent = true) {
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(state.snapshot.rawTexts.take(160)) { text ->
                         Text(text, style = MaterialTheme.typography.bodySmall)
                     }
                 }
+            }
+        }
+        }
+
+        if (compact) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                StatusPane()
+                RawPane(Modifier.fillMaxWidth(), weightedPanels = false)
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                StatusPane(Modifier.weight(0.5f))
+                RawPane(Modifier.weight(0.5f).fillMaxHeight())
             }
         }
     }

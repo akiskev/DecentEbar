@@ -1,20 +1,19 @@
 # Decent E-Bar
 
-**Version 0.0.5.0**
+**Version 0.0.5.1**
 
 Android AccessibilityService controller for the Decent Espresso E-Bar — automates pressure profiling by reading live weight and flow from the E-Bar screen and commanding pressure via gesture swipes on the pressure slider, targeting a calibrated LUT. Optionally connects directly to a **Bookoo Mini scale over BLE** for ultra-fast weight and flow readings.
 
 ## Features
 
 - **Shot controller** — state machine: `IDLE → ARMED → RUNNING → STAGE_TRANSITION → STOPPING → STOPPED / ERROR`
-- **Pressure profiles** — multi-stage profiles with seven stage types:
+- **Pressure profiles** — multi-stage profiles with six stage types:
   - Fixed pressure
   - Time-based pressure ramp
   - Weight-based pressure ramp
   - Flow-limited pressure (PID-like feedback)
   - Yield/time trajectory (output-driven — see below)
   - Hand-drawn pressure curve (direct command vs time or weight — see below)
-  - Stop
 - **Output-based yield/time profiling** — declare the intent ("30 g out in 30 s on a sweet declining curve") instead of programming pressure: a trajectory planner builds a flow-shape curve (flat / declining / ramp-then-decline / blooming / custom — the **custom curve is drawn by hand** in a full-screen editor, freehand + tap/drag handles, with the target weight computed automatically as the area under it) normalized so its integral equals the target yield, then each tick blends the planned flow with a catch-up flow to stay on the yield/time trajectory — gently raising flow when behind and easing when ahead. The recipe is measured **from first drop**: a pressure-driven pre-infusion phase saturates the puck first (flow is unobservable while the scale reads ~0 g), and only when the puck yields does the 30 s / 30 g clock start, so pre-infusion time isn't charged against the recipe. An **extraction-pressure floor** keeps the back of the shot from coasting at near-zero pressure (released on a confirmed gush), avoiding a thin, under-extracted tail. Late-shot taste protection ramps the correction down near the end (Strict / Balanced / Taste-safe modes) so the final seconds are never rescued with a violent flow spike. The computed target flow is handed to the existing flow→pressure controller (resistance feed-forward or incremental-P, selectable per profile) and the commanded pressure is clamped to a per-second rise/fall envelope — pressure stays inside all the usual safety limits. See [docs/yield-time-trajectory.md](docs/yield-time-trajectory.md)
 - **Hand-drawn pressure curve stage** — draw pressure-vs-time or pressure-vs-weight by hand in the same full-screen curve editor and the stage commands it directly (no feedback controller — pressure is the actuator). Each tick the X fraction is computed from elapsed stage time or absolute cup weight, the drawn curve is interpolated (clamped to its endpoints outside the range) and commanded within the stage's min/max pressure; max pressure is both the editor's Y scale and the command cap. A new stage seeds the classic 9-bar-hold → decline-to-6 shape, and the default exit follows the drawn axis: stage time at the drawn duration, or weight at the drawn max weight
 - **Curve editor** — shared full-screen editor for both the custom flow curve and the pressure curve: freehand swipe to rough in the shape, then tap to add and drag to refine handles, with axis tick labels and a live value bubble on the active point; the profile editor shows an inline preview of every curve type (the analytic flow shapes are previewed via the planner's normalized output, so what you see is what will be followed)
@@ -38,7 +37,7 @@ Android AccessibilityService controller for the Decent Espresso E-Bar — automa
 
 ## UI
 
-Landscape-only. NavigationRail on the left. `0.0.5.0` keeps the day-to-day workflow focused on Control, Profile, Log, and About; **Developer Mode** in About reveals the advanced LUT/Debug tools and raw JSON panes.
+Landscape-only. NavigationRail on the left. `0.0.5.1` keeps the day-to-day workflow focused on Control, Profile, Log, and About; **Developer Mode** in About reveals the advanced LUT/Debug tools and raw JSON panes.
 
 | Rail item | Contents |
 |-----|----------|
@@ -81,7 +80,7 @@ One built-in profile is bundled with the app. It is seeded on first run and re-s
 | `minSdk` | 26 |
 | Android Gradle Plugin | 8.7.3 |
 | Kotlin | 2.0.21 |
-| Compose BOM | 2024.12.01 |
+| Compose BOM | 2026.06.00 |
 
 ## Setup
 

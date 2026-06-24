@@ -13,8 +13,8 @@ android {
         applicationId = "dev.akiskev.decentebar"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.0.5.0"
+        versionCode = 7
+        versionName = "0.0.5.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -61,8 +61,8 @@ android {
 }
 
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
-    androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation(platform("androidx.compose:compose-bom:2026.06.00"))
+    androidTestImplementation(platform("androidx.compose:compose-bom:2026.06.00"))
 
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")

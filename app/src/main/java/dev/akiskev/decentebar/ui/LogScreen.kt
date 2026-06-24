@@ -17,7 +17,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -354,13 +353,12 @@ private fun VideoExportRow(
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ShotVideoExporter.Format.entries.forEach { fmt ->
-                FilterChip(
-                    selected = selectedFormat == fmt,
-                    onClick = { selectedFormat = fmt },
-                    label = { Text(fmt.label, style = MaterialTheme.typography.labelSmall) }
-                )
-            }
+            SegmentedChoice(
+                options = ShotVideoExporter.Format.entries,
+                selected = selectedFormat,
+                onSelected = { selectedFormat = it },
+                label = { it.label }
+            )
         }
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),

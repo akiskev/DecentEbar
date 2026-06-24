@@ -4,6 +4,7 @@ import android.graphics.Paint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,8 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -39,6 +40,8 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.akiskev.decentebar.engine.CurveMath
@@ -114,6 +117,30 @@ internal fun CurveEditorContent(
         points = CurveMath.cleanKnots(next)
     }
 
+    fun nudgeActive(dxPct: Double, dy: Double) {
+        val idx = activePoint ?: return
+        if (idx !in points.indices) return
+        val next = points.toMutableList()
+        val endpoint = idx == 0 || idx == next.lastIndex
+        val newPct = if (endpoint) {
+            next[idx].timePct
+        } else {
+            (next[idx].timePct + dxPct)
+                .coerceIn(next[idx - 1].timePct + MIN_GAP, next[idx + 1].timePct - MIN_GAP)
+        }
+        next[idx] = CurvePoint(newPct, (next[idx].flowGps + dy).coerceIn(0.0, yMax))
+        commit(next)
+        activePoint = idx.coerceAtMost(next.lastIndex)
+    }
+
+    fun deleteActive() {
+        val idx = activePoint ?: return
+        if (idx in points.indices && points.size > 2) {
+            commit(points.filterIndexed { i, _ -> i != idx })
+            activePoint = null
+        }
+    }
+
     val cs = MaterialTheme.colorScheme
     val lineColor = cs.primary
     val fillColor = cs.primary.copy(alpha = 0.14f)
@@ -128,17 +155,34 @@ internal fun CurveEditorContent(
             // Landscape is wide but short, so all chrome lives on this row + one slider row; the canvas
             // takes everything in between.
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(summary(points, xMax), style = MaterialTheme.typography.titleSmall, color = cs.primary)
                 Spacer(Modifier.width(8.dp))
-                FilterChip(selected = mode == CurveMode.FREEHAND, onClick = { mode = CurveMode.FREEHAND }, label = { Text("Freehand") })
-                FilterChip(selected = mode == CurveMode.EDIT, onClick = { mode = CurveMode.EDIT }, label = { Text("Edit") })
+                SegmentedChoice(
+                    options = CurveMode.entries,
+                    selected = mode,
+                    onSelected = { mode = it },
+                    label = { if (it == CurveMode.FREEHAND) "Freehand" else "Edit" }
+                )
                 TextButton(onClick = { undo.removeLastOrNull()?.let { points = it } }, enabled = undo.isNotEmpty()) { Text("Undo") }
                 TextButton(onClick = { commit(listOf(CurvePoint(0.0, yMax * 0.5), CurvePoint(1.0, yMax * 0.5))) }) { Text("Clear") }
-                Spacer(Modifier.weight(1f))
+                TextButton(
+                    onClick = { nudgeActive(-0.01, 0.0) },
+                    enabled = activePoint != null && activePoint !in listOf(0, points.lastIndex)
+                ) { Text("X-") }
+                TextButton(
+                    onClick = { nudgeActive(0.01, 0.0) },
+                    enabled = activePoint != null && activePoint !in listOf(0, points.lastIndex)
+                ) { Text("X+") }
+                TextButton(onClick = { nudgeActive(0.0, yMax * 0.02) }, enabled = activePoint != null) { Text("Y+") }
+                TextButton(onClick = { nudgeActive(0.0, -yMax * 0.02) }, enabled = activePoint != null) { Text("Y-") }
+                TextButton(onClick = { deleteActive() }, enabled = activePoint != null && points.size > 2) { Text("Delete point") }
+                Spacer(Modifier.width(16.dp))
                 TextButton(onClick = onCancel) { Text("Cancel") }
                 Button(onClick = { onConfirm(points, xMax, yMax) }) { Text("Done") }
             }
@@ -220,7 +264,12 @@ internal fun CurveEditorContent(
             }
 
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                Canvas(modifier = Modifier.fillMaxSize().then(gestures)) {
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .semantics { contentDescription = "Curve editor canvas" }
+                        .then(gestures)
+                ) {
                     drawCurve(
                         points = points, yMax = yMax, xMax = xMax,
                         mL = mL, mR = mR, mT = mT, mB = mB,
@@ -255,10 +304,10 @@ internal fun CurveEditorContent(
                 }
             }
             Text(
-                "Freehand: drag to draw. Edit: tap a point to read it · drag to move · long-press to delete · tap empty to add.",
+                "Freehand: drag to draw. Edit: tap a point to read it, drag to move, long-press to delete, tap empty to add.",
                 style = MaterialTheme.typography.labelSmall,
                 color = cs.outline,
-                maxLines = 1
+                maxLines = 2
             )
         }
     }

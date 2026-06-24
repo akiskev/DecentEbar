@@ -117,7 +117,18 @@ internal fun ProfileStage.withTypeDefaults(
                 }
             )
         }
-        StageType.STOP -> copy(type = newType)
+        StageType.STOP -> {
+            val cfg = pressureCurve ?: PressureCurveConfig(
+                axis = PressureCurveAxis.WEIGHT,
+                points = defaultPressurePoints(),
+                maxWeightG = targetWeight
+            )
+            copy(
+                type = StageType.PRESSURE_CURVE,
+                pressureCurve = cfg,
+                exit = ExitCondition(weightGte = cfg.maxWeightG)
+            )
+        }
     }
 }
 
@@ -130,8 +141,7 @@ internal val primaryStageTypes: List<StageType> = listOf(
 internal val advancedStageTypes: List<StageType> = listOf(
     StageType.YIELD_TIME_TRAJECTORY,
     StageType.TIME_BASED_PRESSURE_RAMP,
-    StageType.WEIGHT_BASED_PRESSURE_RAMP,
-    StageType.STOP
+    StageType.WEIGHT_BASED_PRESSURE_RAMP
 )
 
 internal fun StageType.shortName(): String {

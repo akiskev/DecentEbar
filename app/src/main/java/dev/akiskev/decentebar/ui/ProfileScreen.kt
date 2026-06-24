@@ -4,9 +4,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -139,7 +139,8 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val profilePanelWidth = if (maxWidth < 820.dp) 220.dp else 260.dp
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -149,7 +150,7 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
         // Left pane: collapsible, hidden by default so stages get full width
         if (showProfilePanel) {
             LazyColumn(
-                modifier = Modifier.width(260.dp).fillMaxHeight(),
+                modifier = Modifier.width(profilePanelWidth).fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(bottom = 12.dp)
             ) {
@@ -569,20 +570,14 @@ private fun StageEditor(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    val visibleStageTypes = primaryStageTypes +
-                        if (showAdvancedTypes) advancedStageTypes else advancedStageTypes.filter { it == stage.type }
-                    visibleStageTypes.distinct().forEach { type ->
-                        FilterChip(
-                            selected = stage.type == type,
-                            onClick = { onStageChange(stage.withTypeDefaults(type, profileTargetWeightG)) },
-                            label = { Text(type.shortName()) }
-                        )
-                    }
-                }
+                val visibleStageTypes = primaryStageTypes +
+                    if (showAdvancedTypes) advancedStageTypes else advancedStageTypes.filter { it == stage.type }
+                SegmentedChoice(
+                    options = visibleStageTypes.distinct(),
+                    selected = stage.type,
+                    onSelected = { type -> onStageChange(stage.withTypeDefaults(type, profileTargetWeightG)) },
+                    label = { it.shortName() }
+                )
                 LabeledSwitch("Advanced types", showAdvancedTypes) { showAdvancedTypes = it }
 
                 when (stage.type) {
@@ -724,36 +719,30 @@ private fun StageEditor(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FlowCurveType.entries.forEach { curve ->
-                                FilterChip(
-                                    selected = yt.curveType == curve,
-                                    onClick = {
-                                        if (curve == FlowCurveType.CUSTOM_POINTS && yt.customPoints.size < 2) {
-                                            // Seed from a sensible default so the editor opens with a curve.
-                                            val seeded = defaultCustomPoints()
-                                            updateYt {
-                                                it.copy(
-                                                    curveType = curve,
-                                                    customPoints = seeded,
-                                                    targetYieldG = CurveMath.areaG(seeded, it.targetDurationS)
-                                                )
-                                            }
-                                        } else {
-                                            // Only the type changes: the shape hints (start/peak/end)
-                                            // are shared by all analytic presets, so mutating them here
-                                            // would corrupt the other presets' previews. DECLINING is
-                                            // guaranteed to decline by the planner itself (rawKnots).
-                                            updateYt { it.copy(curveType = curve) }
-                                        }
-                                    },
-                                    label = { Text(curve.uiLabel()) }
-                                )
-                            }
-                        }
+                        SegmentedChoice(
+                            options = FlowCurveType.entries,
+                            selected = yt.curveType,
+                            onSelected = { curve ->
+                                if (curve == FlowCurveType.CUSTOM_POINTS && yt.customPoints.size < 2) {
+                                    // Seed from a sensible default so the editor opens with a curve.
+                                    val seeded = defaultCustomPoints()
+                                    updateYt {
+                                        it.copy(
+                                            curveType = curve,
+                                            customPoints = seeded,
+                                            targetYieldG = CurveMath.areaG(seeded, it.targetDurationS)
+                                        )
+                                    }
+                                } else {
+                                    // Only the type changes: the shape hints (start/peak/end)
+                                    // are shared by all analytic presets, so mutating them here
+                                    // would corrupt the other presets' previews. DECLINING is
+                                    // guaranteed to decline by the planner itself (rawKnots).
+                                    updateYt { it.copy(curveType = curve) }
+                                }
+                            },
+                            label = { it.uiLabel() }
+                        )
 
                         // Live preview of the curve under the type chips — for every curve type. For
                         // analytic types it samples the planner's normalized flow; for Custom it's the
@@ -791,18 +780,12 @@ private fun StageEditor(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            TastePriorityMode.entries.forEach { mode ->
-                                FilterChip(
-                                    selected = yt.tastePriorityMode == mode,
-                                    onClick = { updateYt { it.copy(tastePriorityMode = mode) } },
-                                    label = { Text(mode.uiLabel()) }
-                                )
-                            }
-                        }
+                        SegmentedChoice(
+                            options = TastePriorityMode.entries,
+                            selected = yt.tastePriorityMode,
+                            onSelected = { mode -> updateYt { it.copy(tastePriorityMode = mode) } },
+                            label = { it.uiLabel() }
+                        )
 
                         SliderField(
                             label = "Max pressure",
@@ -947,34 +930,24 @@ private fun StageEditor(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = pc.axis == PressureCurveAxis.TIME,
-                                onClick = {
-                                    val next = pc.copy(axis = PressureCurveAxis.TIME)
-                                    onStageChange(
-                                        stage.copy(
-                                            pressureCurve = next,
-                                            exit = ExitCondition(stageTimeGteMs = (next.durationS * 1000).toLong())
-                                        )
+                        SegmentedChoice(
+                            options = PressureCurveAxis.entries,
+                            selected = pc.axis,
+                            onSelected = { axis ->
+                                val next = pc.copy(axis = axis)
+                                onStageChange(
+                                    stage.copy(
+                                        pressureCurve = next,
+                                        exit = if (axis == PressureCurveAxis.TIME) {
+                                            ExitCondition(stageTimeGteMs = (next.durationS * 1000).toLong())
+                                        } else {
+                                            ExitCondition(weightGte = next.maxWeightG.coerceAtMost(profileTargetWeightG))
+                                        }
                                     )
-                                },
-                                label = { Text("Time") }
-                            )
-                            FilterChip(
-                                selected = pc.axis == PressureCurveAxis.WEIGHT,
-                                onClick = {
-                                    val next = pc.copy(axis = PressureCurveAxis.WEIGHT)
-                                    onStageChange(
-                                        stage.copy(
-                                            pressureCurve = next,
-                                            exit = ExitCondition(weightGte = next.maxWeightG.coerceAtMost(profileTargetWeightG))
-                                        )
-                                    )
-                                },
-                                label = { Text("Weight") }
-                            )
-                        }
+                                )
+                            },
+                            label = { if (it == PressureCurveAxis.TIME) "Time" else "Weight" }
+                        )
 
                         if (pc.axis == PressureCurveAxis.TIME) {
                             SliderField(
@@ -1077,15 +1050,11 @@ private fun ExitEditor(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Exit", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-                FilterChip(
-                    selected = exit.mode == ExitMode.ANY,
-                    onClick = { onExitChange(exit.copy(mode = ExitMode.ANY)) },
-                    label = { Text("ANY") }
-                )
-                FilterChip(
-                    selected = exit.mode == ExitMode.ALL,
-                    onClick = { onExitChange(exit.copy(mode = ExitMode.ALL)) },
-                    label = { Text("ALL") }
+                SegmentedChoice(
+                    options = ExitMode.entries,
+                    selected = exit.mode,
+                    onSelected = { onExitChange(exit.copy(mode = it)) },
+                    label = { it.name }
                 )
                 Spacer(Modifier.weight(1f))
                 LabeledSwitch("First drop", exit.firstDropDetected) {

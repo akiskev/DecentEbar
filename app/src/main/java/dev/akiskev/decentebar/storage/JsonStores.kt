@@ -2,6 +2,7 @@ package dev.akiskev.decentebar.storage
 
 import android.content.Context
 import dev.akiskev.decentebar.model.DefaultProfiles
+import dev.akiskev.decentebar.model.ProfileConstraints
 import dev.akiskev.decentebar.model.ProfileValidator
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
@@ -16,6 +17,8 @@ class ProfileRepository(context: Context) {
         val hasStoredProfiles = prefs.contains(KEY_PROFILES)
         val stored = prefs.getString(KEY_PROFILES, null)
             ?.let { raw -> runCatching { json.decodeFromString<List<ShotProfile>>(raw) }.getOrNull() }
+            ?.map(ProfileConstraints::normalize)
+            ?.filter { it.stages.isNotEmpty() }
             .orEmpty()
         return seedBuiltIns(stored, hasStoredProfiles)
     }
@@ -45,9 +48,10 @@ class ProfileRepository(context: Context) {
     }
 
     fun upsert(profile: ShotProfile): List<ShotProfile> {
+        val normalized = ProfileConstraints.normalize(profile)
         val next = loadProfiles()
-            .filterNot { it.name == profile.name }
-            .plus(profile)
+            .filterNot { it.name == normalized.name }
+            .plus(normalized)
         saveProfiles(next)
         return next
     }
@@ -72,9 +76,10 @@ class ProfileRepository(context: Context) {
     fun importProfile(rawJson: String): Result<ShotProfile> {
         return runCatching {
             val profile = json.decodeFromString<ShotProfile>(rawJson)
-            val errors = ProfileValidator.validate(profile)
+            val normalized = ProfileConstraints.normalize(profile)
+            val errors = ProfileValidator.validate(normalized)
             require(errors.isEmpty()) { errors.joinToString("; ") }
-            profile
+            normalized
         }
     }
 

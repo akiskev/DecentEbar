@@ -185,6 +185,53 @@ class ProfileValidatorTest {
     }
 
     @Test
+    fun rejectsStopStageType() {
+        val profile = ShotProfile(
+            name = "legacy stop",
+            targetWeightG = 36.0,
+            stopOffsetG = 1.0,
+            maxShotTimeMs = 45_000L,
+            stages = listOf(
+                ProfileStage(
+                    name = "Stop",
+                    type = StageType.STOP
+                )
+            )
+        )
+
+        val errors = ProfileValidator.validate(profile)
+
+        assertTrue(errors.any { it.contains("stop stages are no longer supported") })
+    }
+
+    @Test
+    fun normalizerDropsStopStages() {
+        val profile = ShotProfile(
+            name = "legacy mixed",
+            targetWeightG = 36.0,
+            stopOffsetG = 1.0,
+            maxShotTimeMs = 45_000L,
+            stages = listOf(
+                ProfileStage(
+                    name = "Main",
+                    type = StageType.FIXED_PRESSURE,
+                    fixedPressureBar = 4.0,
+                    exit = ExitCondition(weightGte = 36.0)
+                ),
+                ProfileStage(
+                    name = "Stop",
+                    type = StageType.STOP
+                )
+            )
+        )
+
+        val normalized = ProfileConstraints.normalize(profile)
+
+        assertTrue(normalized.stages.none { it.type == StageType.STOP })
+        assertTrue(normalized.stages.single().name == "Main")
+    }
+
+    @Test
     fun rejectsProfileMaxShotTimeLowerThanStageMaxTimes() {
         val profile = ShotProfile(
             name = "bad time cap",

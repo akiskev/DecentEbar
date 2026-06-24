@@ -113,7 +113,9 @@ object ProfileValidator {
                         }
                     }
                 }
-                StageType.STOP -> Unit
+                StageType.STOP -> {
+                    add("$prefix stop stages are no longer supported")
+                }
             }
 
             val exit = stage.exit
@@ -121,8 +123,7 @@ object ProfileValidator {
                 exit.stageTimeGteMs != null ||
                 exit.flowGte != null ||
                 exit.flowLte != null ||
-                exit.firstDropDetected ||
-                stage.type == StageType.STOP
+                exit.firstDropDetected
             if (!hasExit) add("$prefix needs at least one exit condition")
             if (exit.mode !in ExitMode.entries) add("$prefix has an unknown exit mode")
             if (exit.weightGte != null && exit.weightGte > profileTargetWeightG) {

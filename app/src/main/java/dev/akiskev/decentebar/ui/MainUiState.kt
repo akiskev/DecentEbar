@@ -46,6 +46,7 @@ data class MainUiState(
     val scaleBatteryPercent: Int? = null,
     val importedShotLog: ShotLog? = null,
     val importShotLogMessage: String = "",
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** When off, developer-only UI (LUT/Debug tabs, raw JSON I/O, log export tools) is hidden. */
     val devMode: Boolean = false,
 ) {

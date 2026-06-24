@@ -78,6 +78,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 loadedLut = lut,
                 lutValidation = controller.validateLut(it.snapshot, lut, requireForegroundPackage = false),
                 exportedLutJson = "",
+                themeMode = loadThemeMode(),
                 devMode = settingsPrefs.getBoolean(KEY_DEV_MODE, false)
             )
         }
@@ -125,6 +126,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setDevMode(enabled: Boolean) {
         settingsPrefs.edit().putBoolean(KEY_DEV_MODE, enabled).apply()
         _uiState.update { it.copy(devMode = enabled) }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        settingsPrefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
+        _uiState.update { it.copy(themeMode = mode) }
+    }
+
+    private fun loadThemeMode(): ThemeMode {
+        val stored = settingsPrefs.getString(KEY_THEME_MODE, ThemeMode.SYSTEM.name)
+        return ThemeMode.entries.firstOrNull { it.name == stored } ?: ThemeMode.SYSTEM
     }
 
     // --- Shot controls (delegated) ---
@@ -503,5 +514,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val CALIB_TAG = "DecentEbar"
         const val CALIBRATION_HOP_PX = 100f
         const val KEY_DEV_MODE = "dev_mode"
+        const val KEY_THEME_MODE = "theme_mode"
     }
 }

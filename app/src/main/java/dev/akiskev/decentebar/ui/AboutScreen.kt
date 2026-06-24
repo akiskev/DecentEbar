@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun AboutScreen(
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
     devMode: Boolean,
     onDevModeChange: (Boolean) -> Unit
 ) {
@@ -39,7 +41,7 @@ internal fun AboutScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Decent E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("v0.0.5.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("v0.0.5.1", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Automates espresso pressure profiling on the Decent E-Bar by reading live weight and flow via Android Accessibility and sliding the pressure bar to precise positions.",
@@ -97,6 +99,26 @@ internal fun AboutScreen(
                 ) {
                     Text("Donate with Ko-fi")
                 }
+            }
+        }
+        item {
+            HorizontalDivider()
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Theme", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                SegmentedChoice(
+                    options = ThemeMode.entries,
+                    selected = themeMode,
+                    onSelected = onThemeModeChange,
+                    label = { mode ->
+                        when (mode) {
+                            ThemeMode.SYSTEM -> "System default"
+                            ThemeMode.LIGHT -> "Light"
+                            ThemeMode.DARK -> "Dark"
+                        }
+                    }
+                )
             }
         }
         item {

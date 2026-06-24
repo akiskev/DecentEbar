@@ -37,7 +37,8 @@ object ProfileConstraints {
         val target = profile.targetWeightG.coerceIn(MIN_TARGET_WEIGHT_G, MAX_TARGET_WEIGHT_G)
         val stopOffset = profile.stopOffsetG.coerceIn(0.0, (target - MIN_TARGET_WEIGHT_G).coerceAtLeast(0.0))
         var remainingYield = target
-        val stages = profile.stages.map { stage ->
+        val stages = profile.stages.mapNotNull { stage ->
+            if (stage.type == StageType.STOP) return@mapNotNull null
             val normalized = normalizeStage(stage, target, remainingYield)
             if (normalized.type == StageType.YIELD_TIME_TRAJECTORY) {
                 remainingYield -= normalized.yieldTime?.targetYieldG ?: 0.0

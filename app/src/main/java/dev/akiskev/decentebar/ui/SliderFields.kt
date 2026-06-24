@@ -1,15 +1,15 @@
 package dev.akiskev.decentebar.ui
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -22,8 +22,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -44,69 +46,57 @@ internal fun SliderField(
 ) {
     var localText by remember { mutableStateOf(value.format(decimals)) }
     var textHasFocus by remember { mutableStateOf(false) }
+
     fun commitText(text: String): Boolean {
         val parsed = text.toDoubleOrNull() ?: return false
         val clamped = parsed.coerceIn(valueRange.start.toDouble(), valueRange.endInclusive.toDouble())
         onChange(clamped)
         return true
     }
+
     LaunchedEffect(value) {
         if (!textHasFocus) localText = value.format(decimals)
     }
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+
+    SliderRow(
+        label = label,
+        unit = unit,
+        labelWidth = labelWidth,
+        modifier = modifier
     ) {
-        Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(labelWidth))
         Slider(
             value = value.toFloat().coerceIn(valueRange.start, valueRange.endInclusive),
             onValueChange = { onChange(it.toDouble()) },
             valueRange = valueRange,
             steps = steps,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .semantics { contentDescription = label }
         )
-        BasicTextField(
+        NumericTextField(
             value = localText,
             onValueChange = {
                 localText = it
                 commitText(it)
             },
-            singleLine = true,
-            textStyle = TextStyle(
-                textAlign = TextAlign.End,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = MaterialTheme.typography.bodySmall.fontSize
-            ),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            decorationBox = { innerTextField ->
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.extraSmall)
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    contentAlignment = Alignment.CenterEnd
-                ) {
-                    innerTextField()
-                }
-            },
-            modifier = Modifier
-                .width(60.dp)
-                .onFocusChanged { focusState ->
-                    textHasFocus = focusState.isFocused
-                    if (!focusState.isFocused) {
-                        if (commitText(localText)) {
-                            localText = localText.toDoubleOrNull()
-                                ?.coerceIn(valueRange.start.toDouble(), valueRange.endInclusive.toDouble())
-                                ?.format(decimals)
-                                ?: value.format(decimals)
-                        } else {
-                            localText = value.format(decimals)
-                        }
+            keyboardType = KeyboardType.Decimal,
+            isError = localText.isNotBlank() && localText.toDoubleOrNull() == null,
+            contentDescription = "$label value",
+            modifier = Modifier.width(76.dp),
+            onFocusChanged = { focused ->
+                textHasFocus = focused
+                if (!focused) {
+                    localText = if (commitText(localText)) {
+                        localText.toDoubleOrNull()
+                            ?.coerceIn(valueRange.start.toDouble(), valueRange.endInclusive.toDouble())
+                            ?.format(decimals)
+                            ?: value.format(decimals)
+                    } else {
+                        value.format(decimals)
                     }
                 }
+            }
         )
-        Text(unit, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(32.dp))
     }
 }
 
@@ -123,70 +113,108 @@ internal fun SliderLongField(
 ) {
     var localText by remember { mutableStateOf(value.toString()) }
     var textHasFocus by remember { mutableStateOf(false) }
+
     fun commitText(text: String): Boolean {
         val parsed = text.toLongOrNull() ?: return false
         val clamped = parsed.coerceIn(valueRange.start.toLong(), valueRange.endInclusive.toLong())
         onChange(clamped)
         return true
     }
+
     LaunchedEffect(value) {
         if (!textHasFocus) localText = value.toString()
     }
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+
+    SliderRow(
+        label = label,
+        unit = unit,
+        labelWidth = labelWidth,
+        modifier = modifier
     ) {
-        Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(labelWidth))
         Slider(
             value = value.toFloat().coerceIn(valueRange.start, valueRange.endInclusive),
             onValueChange = { onChange(it.roundToLong()) },
             valueRange = valueRange,
             steps = steps,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .semantics { contentDescription = label }
         )
-        BasicTextField(
+        NumericTextField(
             value = localText,
             onValueChange = {
                 localText = it
                 commitText(it)
             },
-            singleLine = true,
-            textStyle = TextStyle(
-                textAlign = TextAlign.End,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = MaterialTheme.typography.bodySmall.fontSize
-            ),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            decorationBox = { innerTextField ->
-                Box(
-                    modifier = Modifier
-                        .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.extraSmall)
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    contentAlignment = Alignment.CenterEnd
-                ) {
-                    innerTextField()
-                }
-            },
-            modifier = Modifier
-                .width(72.dp)
-                .onFocusChanged { focusState ->
-                    textHasFocus = focusState.isFocused
-                    if (!focusState.isFocused) {
-                        if (commitText(localText)) {
-                            localText = localText.toLongOrNull()
-                                ?.coerceIn(valueRange.start.toLong(), valueRange.endInclusive.toLong())
-                                ?.toString()
-                                ?: value.toString()
-                        } else {
-                            localText = value.toString()
-                        }
+            keyboardType = KeyboardType.Number,
+            isError = localText.isNotBlank() && localText.toLongOrNull() == null,
+            contentDescription = "$label value",
+            modifier = Modifier.width(86.dp),
+            onFocusChanged = { focused ->
+                textHasFocus = focused
+                if (!focused) {
+                    localText = if (commitText(localText)) {
+                        localText.toLongOrNull()
+                            ?.coerceIn(valueRange.start.toLong(), valueRange.endInclusive.toLong())
+                            ?.toString()
+                            ?: value.toString()
+                    } else {
+                        value.toString()
                     }
                 }
+            }
         )
-        Text(unit, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(32.dp))
     }
+}
+
+@Composable
+private fun SliderRow(
+    label: String,
+    unit: String,
+    labelWidth: Dp,
+    modifier: Modifier,
+    controls: @Composable RowScope.() -> Unit
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(labelWidth))
+        controls()
+        Text(unit, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(40.dp))
+    }
+}
+
+@Composable
+private fun NumericTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    keyboardType: KeyboardType,
+    isError: Boolean,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    onFocusChanged: (Boolean) -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        isError = isError,
+        textStyle = MaterialTheme.typography.bodySmall.copy(textAlign = TextAlign.End),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = keyboardType,
+            imeAction = ImeAction.Done
+        ),
+        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .semantics { this.contentDescription = contentDescription }
+            .onFocusChanged { onFocusChanged(it.isFocused) }
+    )
 }
 
 @Composable
@@ -226,13 +254,16 @@ internal fun OptionalSliderField(
     onChange: (Double?) -> Unit
 ) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Switch(
             checked = value != null,
-            onCheckedChange = { enabled -> onChange(if (enabled) defaultValue else null) }
+            onCheckedChange = { enabled -> onChange(if (enabled) defaultValue else null) },
+            modifier = Modifier.semantics { contentDescription = "$label enabled" }
         )
         if (value != null) {
             SliderField(
@@ -248,7 +279,7 @@ internal fun OptionalSliderField(
             )
         } else {
             Text(
-                "$label: —",
+                "$label: --",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
@@ -270,13 +301,16 @@ internal fun OptionalSliderLongField(
     onChange: (Long?) -> Unit
 ) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Switch(
             checked = value != null,
-            onCheckedChange = { enabled -> onChange(if (enabled) defaultValue else null) }
+            onCheckedChange = { enabled -> onChange(if (enabled) defaultValue else null) },
+            modifier = Modifier.semantics { contentDescription = "$label enabled" }
         )
         if (value != null) {
             SliderLongField(
@@ -291,7 +325,7 @@ internal fun OptionalSliderLongField(
             )
         } else {
             Text(
-                "$label: —",
+                "$label: --",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
@@ -312,13 +346,16 @@ internal fun OptionalSliderDurationField(
     onChange: (Long?) -> Unit
 ) {
     Row(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Switch(
             checked = valueMs != null,
-            onCheckedChange = { enabled -> onChange(if (enabled) defaultValueMs else null) }
+            onCheckedChange = { enabled -> onChange(if (enabled) defaultValueMs else null) },
+            modifier = Modifier.semantics { contentDescription = "$label enabled" }
         )
         if (valueMs != null) {
             SliderDurationField(
