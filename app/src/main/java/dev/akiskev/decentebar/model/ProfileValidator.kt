@@ -8,9 +8,8 @@ object ProfileValidator {
             if (profile.stopOffsetG < 0.0) add("Stop offset cannot be negative")
             if (profile.stopOffsetG >= profile.targetWeightG) add("Stop offset must be lower than target weight")
             if (profile.maxShotTimeMs <= 0L) add("Max shot time must be greater than 0")
-            val stageMaxTimeSum = ProfileConstraints.configuredStageMaxTimeMs(profile)
-            if (stageMaxTimeSum > 0L && profile.maxShotTimeMs < stageMaxTimeSum) {
-                add("Max shot time must be at least the sum of stage max times (${stageMaxTimeSum / 1000}s)")
+            if (profile.maxShotTimeMs > ProfileConstraints.MAX_PROFILE_TIME_MS) {
+                add("Max shot time cannot exceed ${ProfileConstraints.MAX_PROFILE_TIME_MS / 1000}s")
             }
             val yieldSum = ProfileConstraints.yieldTargetSumG(profile)
             if (yieldSum > profile.targetWeightG + 1e-6) {
@@ -130,11 +129,17 @@ object ProfileValidator {
                 add("$prefix exit weight cannot exceed profile target weight")
             }
             if (exit.stageTimeGteMs != null && exit.stageTimeGteMs <= 0L) add("$prefix exit time must be greater than 0")
+            if (exit.stageTimeGteMs != null && exit.stageTimeGteMs > ProfileConstraints.MAX_PROFILE_TIME_MS) {
+                add("$prefix exit time cannot exceed ${ProfileConstraints.MAX_PROFILE_TIME_MS / 1000}s")
+            }
             if (exit.flowGte != null && exit.flowLte != null && exit.flowGte > exit.flowLte) {
                 add("$prefix flow >= cannot exceed flow <=")
             }
             if (stage.safety.maxStageTimeMs != null && stage.safety.maxStageTimeMs <= 0L) {
                 add("$prefix stage max time must be greater than 0")
+            }
+            if (stage.safety.maxStageTimeMs != null && stage.safety.maxStageTimeMs > ProfileConstraints.MAX_PROFILE_TIME_MS) {
+                add("$prefix stage max time cannot exceed ${ProfileConstraints.MAX_PROFILE_TIME_MS / 1000}s")
             }
         }
     }

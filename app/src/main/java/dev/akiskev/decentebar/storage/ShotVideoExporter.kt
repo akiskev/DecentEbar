@@ -35,7 +35,7 @@ object ShotVideoExporter {
 
         val mime = "video/avc"
         val mediaFormat = MediaFormat.createVideoFormat(mime, format.width, format.height).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar)
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, nv12InputColorFormat())
             setInteger(MediaFormat.KEY_BIT_RATE, 6_000_000)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
@@ -115,6 +115,12 @@ object ShotVideoExporter {
             pfd?.close()
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun nv12InputColorFormat(): Int =
+        // The byte-buffer encoder path below feeds NV12 directly. The modern alternative is an
+        // input Surface or flexible-YUV negotiation, which needs device video-export validation.
+        MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
 
     // Returns true when EOS is reached
     private inline fun drainEncoder(

@@ -50,7 +50,7 @@ class ShotController(
     private val safetyConfig: SafetyConfig,
     private val lutManager: PressureLutManager,
     private val flowEstimator: FlowEstimator,
-    private val startScaleTimer: () -> Unit,
+    private val prepareScaleForShotStart: () -> Unit,
 ) {
     var shotStartMs: Long? = null
         private set
@@ -87,6 +87,8 @@ class ShotController(
     private var controlLawLoggedForCurrentStage = false
     private var lastFlowCorrectionMs: Long? = null
     private var lastCorrectionFlowGps: Double? = null
+    private var scalePreparedForShot = false
+    private var scaleTareSettleUntilMs: Long? = null
 
     // Resistance feed-forward controller for FLOW_LIMITED_PRESSURE stages that opt in via
     // ProfileStage.feedForward (docs/puck-resistance-feedforward.md §5). The legacy
@@ -230,6 +232,7 @@ class ShotController(
         }
 
         if (snapshot.hasStop) {
+            prepareConnectedScaleForShotStart(nowMs)
             // Stop is visible, so the shot has started. But after an e-bar/OS update the
             // press of Start can pop a transient "Loading…" overlay for a second or two,
             // during which the pressure bar isn't in the accessibility tree yet. Running
@@ -292,16 +295,14 @@ class ShotController(
         firstDropConsecutiveReadings = 0
         firstDropDetected = false
         stopSent = false
-        if (state.value.scaleConnectionState == ScaleConnectionState.CONNECTED) {
-            startScaleTimer()
-        }
+        prepareConnectedScaleForShotStart(nowMs)
         recordState(ControllerState.RUNNING, "Shot running")
         state.update {
             it.copy(
                 controllerState = ControllerState.RUNNING,
                 currentStageIndex = 0,
                 elapsedShotTimeMs = 0L,
-                safetyStatus = "Running",
+                safetyStatus = if (scaleTareSettleUntilMs != null) "Running; taring scale" else "Running",
                 currentWeightG = snapshot.weightG,
                 // The machine resets the slider to 0 bar at shot start, so the first
                 // pressure swipe of each shot must drag from there (not a stale value
@@ -309,6 +310,16 @@ class ShotController(
                 commandedPressureBar = null
             )
         }
+    }
+
+    private fun prepareConnectedScaleForShotStart(nowMs: Long) {
+        if (scalePreparedForShot || state.value.scaleConnectionState != ScaleConnectionState.CONNECTED) {
+            return
+        }
+        prepareScaleForShotStart()
+        scalePreparedForShot = true
+        scaleTareSettleUntilMs = nowMs + SCALE_TARE_SETTLE_MS
+        recordEvent(ShotEventType.INFO, "Bookoo scale tare requested at shot start")
     }
 
     private fun handleRunningSnapshot(snapshot: EbarSnapshot, nowMs: Long) {
@@ -333,7 +344,13 @@ class ShotController(
             if (nowMs - missingSince > safetyConfig.missingWeightTimeoutMs) {
                 fail("Scale: no weight data for ${safetyConfig.missingWeightTimeoutMs}ms", attemptStop = true)
             }
-            state.update { it.copy(elapsedShotTimeMs = elapsedMs, safetyStatus = "Running") }
+            val isSettlingTare = scaleTareSettleUntilMs?.let { nowMs < it } == true
+            state.update {
+                it.copy(
+                    elapsedShotTimeMs = elapsedMs,
+                    safetyStatus = if (isSettlingTare) "Running; taring scale" else "Running"
+                )
+            }
             return
         }
 
@@ -381,14 +398,31 @@ class ShotController(
         val current = state.value
         val weight = reading.weightG
         val scaleFlow = reading.flowGps
-        // Run our software estimator in parallel — result logged as altFlowGps for comparison
-        val calcFlow = flowEstimator.addSample(nowMs, weight)
 
         when (current.controllerState) {
             ControllerState.RUNNING, ControllerState.STAGE_TRANSITION -> {
                 val shotStart = shotStartMs ?: return
                 val elapsedMs = nowMs - shotStart
 
+                val tareSettleUntil = scaleTareSettleUntilMs
+                if (tareSettleUntil != null && nowMs < tareSettleUntil) {
+                    state.update {
+                        it.copy(
+                            currentWeightG = weight,
+                            currentFlowGps = scaleFlow,
+                            currentCalcFlowGps = current.currentCalcFlowGps,
+                            elapsedShotTimeMs = elapsedMs,
+                            scaleBatteryPercent = reading.batteryPercent,
+                            safetyStatus = "Running; taring scale"
+                        )
+                    }
+                    return
+                }
+                scaleTareSettleUntilMs = null
+
+                // Run our software estimator in parallel — result logged as altFlowGps for comparison.
+                // Start it after the tare window so pre-tare weight packets do not skew the baseline.
+                val calcFlow = flowEstimator.addSample(nowMs, weight)
                 lastValidWeightMs = nowMs
                 updateFirstDrop(weight)
 
@@ -422,7 +456,7 @@ class ShotController(
                     it.copy(
                         currentWeightG = weight,
                         currentFlowGps = scaleFlow,
-                        currentCalcFlowGps = calcFlow,
+                        currentCalcFlowGps = current.currentCalcFlowGps,
                         scaleBatteryPercent = reading.batteryPercent
                     )
                 }
@@ -1198,6 +1232,8 @@ class ShotController(
         stageStartMs = null
         stageEntryPressureBar = null
         stageEntryWeightG = null
+        scalePreparedForShot = false
+        scaleTareSettleUntilMs = null
         lastYieldCommandMs = null
         prevYieldFlowGps = null
         gushConfirmTicks = 0
@@ -1223,6 +1259,8 @@ class ShotController(
     private fun resetRuntimeAfterTerminalState() {
         stageStartMs = null
         stageEntryPressureBar = null
+        scalePreparedForShot = false
+        scaleTareSettleUntilMs = null
         lastValidWeightMs = null
         flowEstimator.reset()
         lutManager.resetThrottle()
@@ -1328,6 +1366,8 @@ class ShotController(
 
         // Yield/time stage: deadband for the incremental-P flow tracker.
         private const val INCREMENTAL_DEADBAND_GPS = 0.1
+        // Give the Bookoo scale a few notification cycles to apply tare before weight-based stops.
+        private const val SCALE_TARE_SETTLE_MS = 350L
         // Gush detection (fall-clamp bypass): flow must exceed the corrected target by this much,
         // be rising, with weight at/ahead of plan, for this many consecutive control ticks.
         private const val GUSH_MARGIN_GPS = 0.6

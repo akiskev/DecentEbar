@@ -1,12 +1,18 @@
 package dev.akiskev.decentebar.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -21,12 +27,10 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationRail
-import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
@@ -36,11 +40,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -52,6 +60,11 @@ private enum class AppTab(val label: String, val icon: ImageVector) {
     LOG("Log", Icons.Default.Assessment),
     ABOUT("About", Icons.Default.Info)
 }
+
+private val AppRailWidth = 76.dp
+private val AppRailIconPillWidth = 52.dp
+private val AppRailIconPillHeight = 32.dp
+private val AppRailItemMinHeight = 62.dp
 
 @Composable
 fun MainScreen(
@@ -104,78 +117,85 @@ fun MainScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            NavigationRail(
-                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            Surface(
+                modifier = Modifier.width(AppRailWidth),
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 contentColor = MaterialTheme.colorScheme.onSurface
             ) {
                 val mainTabs = listOf(AppTab.CONTROL, AppTab.PROFILE, AppTab.LOG)
                 val developerTabs = listOf(AppTab.LUT, AppTab.DEBUG).filter { state.devMode }
                 Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.Top
+                        .fillMaxHeight()
+                        .padding(top = 8.dp, bottom = 8.dp)
                 ) {
-                    mainTabs.forEach { tab ->
-                        AppRailItem(
-                            tab = tab,
-                            selected = selectedTab == tab,
-                            onClick = { selectTab(tab) }
-                        )
-                    }
-                    if (developerTabs.isNotEmpty()) {
-                        Text(
-                            "Dev",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 2.dp)
-                        )
-                        developerTabs.forEach { tab ->
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Top
+                    ) {
+                        mainTabs.forEach { tab ->
                             AppRailItem(
                                 tab = tab,
                                 selected = selectedTab == tab,
                                 onClick = { selectTab(tab) }
                             )
                         }
+                        if (developerTabs.isNotEmpty()) {
+                            Text(
+                                "Dev",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)
+                            )
+                            developerTabs.forEach { tab ->
+                                AppRailItem(
+                                    tab = tab,
+                                    selected = selectedTab == tab,
+                                    onClick = { selectTab(tab) }
+                                )
+                            }
+                        }
                     }
-                }
-                Box(Modifier.padding(top = 4.dp)) {
-                    NavigationRailItem(
-                        modifier = Modifier.semantics { contentDescription = "Support menu" },
-                        icon = { Icon(Icons.Default.Favorite, contentDescription = null) },
-                        label = { Text("Support") },
-                        selected = false,
-                        onClick = { supportMenuExpanded = true },
-                        colors = NavigationRailItemDefaults.colors(
-                            unselectedIconColor = MaterialTheme.colorScheme.secondary,
-                            unselectedTextColor = MaterialTheme.colorScheme.secondary
+
+                    Box(Modifier.fillMaxWidth()) {
+                        RailButton(
+                            label = "Support",
+                            icon = Icons.Default.Favorite,
+                            selected = false,
+                            onClick = { supportMenuExpanded = true },
+                            contentDescription = "Support menu",
+                            unselectedTint = MaterialTheme.colorScheme.secondary
                         )
+                        DropdownMenu(
+                            expanded = supportMenuExpanded,
+                            onDismissRequest = { supportMenuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("PayPal") },
+                                onClick = {
+                                    supportMenuExpanded = false
+                                    uriHandler.openUri(PAYPAL_DONATION_URL)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Ko-fi") },
+                                onClick = {
+                                    supportMenuExpanded = false
+                                    uriHandler.openUri(KOFI_DONATION_URL)
+                                }
+                            )
+                        }
+                    }
+                    AppRailItem(
+                        tab = AppTab.ABOUT,
+                        selected = selectedTab == AppTab.ABOUT,
+                        onClick = { selectTab(AppTab.ABOUT) }
                     )
-                    DropdownMenu(
-                        expanded = supportMenuExpanded,
-                        onDismissRequest = { supportMenuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("PayPal") },
-                            onClick = {
-                                supportMenuExpanded = false
-                                uriHandler.openUri(PAYPAL_DONATION_URL)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Ko-fi") },
-                            onClick = {
-                                supportMenuExpanded = false
-                                uriHandler.openUri(KOFI_DONATION_URL)
-                            }
-                        )
-                    }
                 }
-                AppRailItem(
-                    tab = AppTab.ABOUT,
-                    selected = selectedTab == AppTab.ABOUT,
-                    onClick = { selectTab(AppTab.ABOUT) }
-                )
             }
             VerticalDivider()
             Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -207,11 +227,56 @@ private fun AppRailItem(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    NavigationRailItem(
-        modifier = Modifier.semantics { contentDescription = "${tab.label} tab" },
-        icon = { Icon(tab.icon, contentDescription = null) },
-        label = { Text(tab.label) },
+    RailButton(
+        label = tab.label,
+        icon = tab.icon,
         selected = selected,
-        onClick = onClick
+        onClick = onClick,
+        contentDescription = "${tab.label} tab"
     )
+}
+
+@Composable
+private fun RailButton(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+    contentDescription: String,
+    unselectedTint: Color = MaterialTheme.colorScheme.onSurfaceVariant
+) {
+    val colors = MaterialTheme.colorScheme
+    val contentColor = if (selected) colors.onPrimaryContainer else unselectedTint
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = AppRailItemMinHeight)
+            .clickable(onClick = onClick)
+            .semantics { this.contentDescription = contentDescription }
+            .padding(vertical = 3.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .width(AppRailIconPillWidth)
+                .height(AppRailIconPillHeight)
+                .clip(MaterialTheme.shapes.extraLarge)
+                .background(if (selected) colors.primaryContainer else Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = contentColor)
+        }
+        Text(
+            label,
+            maxLines = 1,
+            softWrap = false,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 2.dp)
+        )
+    }
 }

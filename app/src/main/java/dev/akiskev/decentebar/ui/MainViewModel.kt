@@ -63,7 +63,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         safetyConfig = safetyConfig,
         lutManager = lutManager,
         flowEstimator = flowEstimator,
-        startScaleTimer = scaleManager::startTimer
+        prepareScaleForShotStart = scaleManager::prepareForShotStart
     )
 
     init {

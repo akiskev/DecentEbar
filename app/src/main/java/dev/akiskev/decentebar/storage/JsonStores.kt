@@ -2,10 +2,19 @@ package dev.akiskev.decentebar.storage
 
 import android.content.Context
 import dev.akiskev.decentebar.model.DefaultProfiles
+import dev.akiskev.decentebar.model.ExitCondition
+import dev.akiskev.decentebar.model.FlowCurveType
 import dev.akiskev.decentebar.model.ProfileConstraints
+import dev.akiskev.decentebar.model.ProfileStage
 import dev.akiskev.decentebar.model.ProfileValidator
+import dev.akiskev.decentebar.model.PressureCurveAxis
+import dev.akiskev.decentebar.model.PressureCurveConfig
+import dev.akiskev.decentebar.model.StageType
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
+import dev.akiskev.decentebar.model.YieldTimeTrajectoryConfig
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -71,11 +80,11 @@ class ProfileRepository(context: Context) {
         return upsert(profile.copy(name = newName))
     }
 
-    fun exportProfile(profile: ShotProfile): String = json.encodeToString(profile)
+    fun exportProfile(profile: ShotProfile): String = ProfileJsonCodec.encode(profile)
 
     fun importProfile(rawJson: String): Result<ShotProfile> {
         return runCatching {
-            val profile = json.decodeFromString<ShotProfile>(rawJson)
+            val profile = ProfileJsonCodec.decode(rawJson)
             val normalized = ProfileConstraints.normalize(profile)
             val errors = ProfileValidator.validate(normalized)
             require(errors.isEmpty()) { errors.joinToString("; ") }
@@ -100,4 +109,184 @@ object JsonCodec {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
+}
+
+object ProfileJsonCodec {
+    @OptIn(ExperimentalSerializationApi::class)
+    private val compactJson = Json(JsonCodec.json) {
+        encodeDefaults = false
+        explicitNulls = false
+    }
+
+    fun encode(profile: ShotProfile): String =
+        compactJson.encodeToString(compact(ProfileConstraints.normalize(profile)))
+
+    fun decode(rawJson: String): ShotProfile = JsonCodec.json.decodeFromString(rawJson)
+
+    private fun compact(profile: ShotProfile): CompactProfile =
+        CompactProfile(
+            schemaVersion = profile.schemaVersion,
+            name = profile.name,
+            targetWeightG = profile.targetWeightG,
+            stopOffsetG = profile.stopOffsetG,
+            stages = profile.stages.mapNotNull(::compactStage)
+        )
+
+    private fun compactStage(stage: ProfileStage): ProfileStage? {
+        val exit = compactExit(stage.exit)
+        val safety = stage.safety
+        return when (stage.type) {
+            StageType.FIXED_PRESSURE -> ProfileStage(
+                name = stage.name,
+                type = StageType.FIXED_PRESSURE,
+                fixedPressureBar = stage.fixedPressureBar,
+                exit = exit,
+                safety = safety
+            )
+            StageType.FLOW_LIMITED_PRESSURE -> ProfileStage(
+                name = stage.name,
+                type = StageType.FLOW_LIMITED_PRESSURE,
+                pressureCapBar = stage.pressureCapBar,
+                targetFlowGps = stage.targetFlowGps,
+                flowDeadbandGps = stage.flowDeadbandGps.unlessDefault(DEFAULT_FLOW_DEADBAND_GPS),
+                pressureStepBar = stage.pressureStepBar,
+                correctionIntervalMs = stage.correctionIntervalMs,
+                pressureStepMultiplierMax = stage.pressureStepMultiplierMax
+                    .unlessDefault(DEFAULT_PRESSURE_STEP_MULTIPLIER_MAX),
+                feedForward = stage.feedForward,
+                exit = exit,
+                safety = safety
+            )
+            StageType.WEIGHT_BASED_PRESSURE_RAMP -> ProfileStage(
+                name = stage.name,
+                type = StageType.WEIGHT_BASED_PRESSURE_RAMP,
+                rampStartPressureBar = stage.rampStartPressureBar,
+                rampEndPressureBar = stage.rampEndPressureBar,
+                rampStartWeightG = stage.rampStartWeightG,
+                rampEndWeightG = stage.rampEndWeightG,
+                exit = exit,
+                safety = safety
+            )
+            StageType.TIME_BASED_PRESSURE_RAMP -> ProfileStage(
+                name = stage.name,
+                type = StageType.TIME_BASED_PRESSURE_RAMP,
+                rampStartPressureBar = stage.rampStartPressureBar,
+                rampEndPressureBar = stage.rampEndPressureBar,
+                rampDurationMs = stage.rampDurationMs,
+                exit = exit,
+                safety = safety
+            )
+            StageType.YIELD_TIME_TRAJECTORY -> ProfileStage(
+                name = stage.name,
+                type = StageType.YIELD_TIME_TRAJECTORY,
+                yieldTime = stage.yieldTime?.let(::compactYieldTime),
+                exit = exit,
+                safety = safety
+            )
+            StageType.PRESSURE_CURVE -> ProfileStage(
+                name = stage.name,
+                type = StageType.PRESSURE_CURVE,
+                pressureCurve = stage.pressureCurve?.let(::compactPressureCurve),
+                exit = exit,
+                safety = safety
+            )
+            StageType.STOP -> null
+        }
+    }
+
+    private fun compactExit(exit: ExitCondition): ExitCondition =
+        ExitCondition(
+            mode = exit.mode,
+            weightGte = exit.weightGte,
+            stageTimeGteMs = exit.stageTimeGteMs,
+            flowGte = exit.flowGte,
+            flowLte = exit.flowLte,
+            firstDropDetected = exit.firstDropDetected
+        )
+
+    private fun compactYieldTime(config: YieldTimeTrajectoryConfig): YieldTimeTrajectoryConfig {
+        val defaults = YieldTimeTrajectoryConfig()
+        val shapeScoped = when (config.curveType) {
+            FlowCurveType.FLAT -> config.copy(
+                startFlowGps = defaults.startFlowGps,
+                peakFlowGps = defaults.peakFlowGps,
+                endFlowGps = defaults.endFlowGps,
+                peakAtPct = defaults.peakAtPct,
+                customPoints = emptyList()
+            )
+            FlowCurveType.DECLINING -> config.copy(
+                peakFlowGps = defaults.peakFlowGps,
+                peakAtPct = defaults.peakAtPct,
+                customPoints = emptyList()
+            )
+            FlowCurveType.RAMP_THEN_DECLINE,
+            FlowCurveType.BLOOMING_DECLINE -> config.copy(customPoints = emptyList())
+            FlowCurveType.CUSTOM_POINTS -> config.copy(
+                startFlowGps = defaults.startFlowGps,
+                peakFlowGps = defaults.peakFlowGps,
+                endFlowGps = defaults.endFlowGps,
+                peakAtPct = defaults.peakAtPct
+            )
+        }
+        return shapeScoped.copy(
+            targetYieldG = shapeScoped.targetYieldG.snapDefault(defaults.targetYieldG),
+            targetDurationS = shapeScoped.targetDurationS.snapDefault(defaults.targetDurationS),
+            startFlowGps = shapeScoped.startFlowGps.snapDefault(defaults.startFlowGps),
+            peakFlowGps = shapeScoped.peakFlowGps.snapDefault(defaults.peakFlowGps),
+            endFlowGps = shapeScoped.endFlowGps.snapDefault(defaults.endFlowGps),
+            peakAtPct = shapeScoped.peakAtPct.snapDefault(defaults.peakAtPct),
+            maxPressureBar = shapeScoped.maxPressureBar.snapDefault(defaults.maxPressureBar),
+            minPressureBar = shapeScoped.minPressureBar.snapDefault(defaults.minPressureBar),
+            minExtractionPressureBar = shapeScoped.minExtractionPressureBar
+                .snapDefault(defaults.minExtractionPressureBar),
+            maxFlowGps = shapeScoped.maxFlowGps.snapDefault(defaults.maxFlowGps),
+            minFlowGps = shapeScoped.minFlowGps.snapDefault(defaults.minFlowGps),
+            maxPressureRiseBarPerS = shapeScoped.maxPressureRiseBarPerS
+                .snapDefault(defaults.maxPressureRiseBarPerS),
+            maxPressureFallBarPerS = shapeScoped.maxPressureFallBarPerS
+                .snapDefault(defaults.maxPressureFallBarPerS),
+            correctionStrength = shapeScoped.correctionStrength.snapDefault(defaults.correctionStrength),
+            lateShotCorrectionLimitS = shapeScoped.lateShotCorrectionLimitS
+                .snapDefault(defaults.lateShotCorrectionLimitS),
+            preInfusionPressureBar = shapeScoped.preInfusionPressureBar
+                .snapDefault(defaults.preInfusionPressureBar),
+            preInfusionMaxS = shapeScoped.preInfusionMaxS.snapDefault(defaults.preInfusionMaxS)
+        )
+    }
+
+    private fun compactPressureCurve(config: PressureCurveConfig): PressureCurveConfig {
+        val defaults = PressureCurveConfig()
+        val axisScoped = when (config.axis) {
+            PressureCurveAxis.TIME -> config.copy(maxWeightG = defaults.maxWeightG)
+            PressureCurveAxis.WEIGHT -> config.copy(durationS = defaults.durationS)
+        }
+        return axisScoped.copy(
+            durationS = axisScoped.durationS.snapDefault(defaults.durationS),
+            maxWeightG = axisScoped.maxWeightG.snapDefault(defaults.maxWeightG),
+            maxPressureBar = axisScoped.maxPressureBar.snapDefault(defaults.maxPressureBar),
+            minPressureBar = axisScoped.minPressureBar.snapDefault(defaults.minPressureBar)
+        )
+    }
+
+    private fun Double?.unlessDefault(default: Double): Double? =
+        this?.takeUnless { it.isCloseTo(default) }
+
+    private fun Double.snapDefault(default: Double): Double =
+        if (isCloseTo(default)) default else this
+
+    private fun Double.isCloseTo(other: Double): Boolean =
+        kotlin.math.abs(this - other) <= DEFAULT_EPS
+
+    @Serializable
+    private data class CompactProfile(
+        val schemaVersion: Int,
+        val name: String,
+        val targetWeightG: Double,
+        val stopOffsetG: Double,
+        val stages: List<ProfileStage>
+    )
+
+    private const val DEFAULT_FLOW_DEADBAND_GPS = 0.1
+    private const val DEFAULT_PRESSURE_STEP_MULTIPLIER_MAX = 8.0
+    private const val DEFAULT_EPS = 1e-6
 }

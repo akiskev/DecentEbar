@@ -3,180 +3,58 @@
     "name": "Flow 34",
     "targetWeightG": 33.0,
     "stopOffsetG": 1.2,
-    "maxShotTimeMs": 45000,
     "stages": [
         {
             "name": "Preinfusion",
             "type": "FIXED_PRESSURE",
             "fixedPressureBar": 7.0,
-            "pressureCapBar": null,
-            "targetFlowGps": null,
-            "flowDeadbandGps": null,
-            "pressureStepBar": null,
-            "correctionIntervalMs": null,
-            "rampStartPressureBar": null,
-            "rampEndPressureBar": null,
-            "rampStartWeightG": null,
-            "rampEndWeightG": null,
-            "rampDurationMs": null,
             "exit": {
-                "mode": "ANY",
-                "weightGte": null,
                 "stageTimeGteMs": 15000,
-                "flowGte": null,
-                "flowLte": null,
-                "firstDropDetected": true,
-                "manualSkip": false,
-                "safetyTimeout": false
-            },
-            "safety": {
-                "maxStageTimeMs": null,
-                "requireTwoConsecutiveFirstDropReadings": false
+                "firstDropDetected": true
             }
         },
         {
             "name": "Wait",
             "type": "FIXED_PRESSURE",
             "fixedPressureBar": 0.0,
-            "pressureCapBar": null,
-            "targetFlowGps": null,
-            "flowDeadbandGps": null,
-            "pressureStepBar": null,
-            "correctionIntervalMs": null,
-            "rampStartPressureBar": null,
-            "rampEndPressureBar": null,
-            "rampStartWeightG": null,
-            "rampEndWeightG": null,
-            "rampDurationMs": null,
             "exit": {
-                "mode": "ANY",
                 "weightGte": 6.000000476837158,
-                "stageTimeGteMs": 5000,
-                "flowGte": null,
-                "flowLte": null,
-                "firstDropDetected": false,
-                "manualSkip": false,
-                "safetyTimeout": false
-            },
-            "safety": {
-                "maxStageTimeMs": null,
-                "requireTwoConsecutiveFirstDropReadings": false
+                "stageTimeGteMs": 5000
             }
         },
         {
             "name": "Ramp",
             "type": "TIME_BASED_PRESSURE_RAMP",
-            "fixedPressureBar": null,
-            "pressureCapBar": null,
-            "targetFlowGps": null,
-            "flowDeadbandGps": null,
-            "pressureStepBar": null,
-            "correctionIntervalMs": null,
             "rampStartPressureBar": 0.0,
             "rampEndPressureBar": 9.0,
-            "rampStartWeightG": null,
-            "rampEndWeightG": null,
             "rampDurationMs": 1500,
             "exit": {
-                "mode": "ANY",
-                "weightGte": null,
-                "stageTimeGteMs": 1500,
-                "flowGte": null,
-                "flowLte": null,
-                "firstDropDetected": false,
-                "manualSkip": false,
-                "safetyTimeout": false
-            },
-            "safety": {
-                "maxStageTimeMs": null,
-                "requireTwoConsecutiveFirstDropReadings": false
+                "stageTimeGteMs": 1500
             }
         },
         {
             "name": "Main",
             "type": "FLOW_LIMITED_PRESSURE",
-            "fixedPressureBar": null,
             "pressureCapBar": 9.0,
             "targetFlowGps": 1.899999976158142,
-            "flowDeadbandGps": 0.10000000149011612,
             "pressureStepBar": 0.2,
             "correctionIntervalMs": 200,
-            "rampStartPressureBar": null,
-            "rampEndPressureBar": null,
-            "rampStartWeightG": null,
-            "rampEndWeightG": null,
-            "rampDurationMs": null,
             "exit": {
-                "mode": "ANY",
-                "weightGte": 27.0,
-                "stageTimeGteMs": null,
-                "flowGte": null,
-                "flowLte": null,
-                "firstDropDetected": false,
-                "manualSkip": false,
-                "safetyTimeout": false
+                "weightGte": 27.0
             },
             "safety": {
-                "maxStageTimeMs": 35000,
-                "requireTwoConsecutiveFirstDropReadings": false
+                "maxStageTimeMs": 35000
             }
         },
         {
             "name": "Fade",
             "type": "FLOW_LIMITED_PRESSURE",
-            "fixedPressureBar": null,
             "pressureCapBar": 8.0,
             "targetFlowGps": 1.600000023841858,
-            "flowDeadbandGps": 0.10000000149011612,
             "pressureStepBar": 0.2,
             "correctionIntervalMs": 100,
-            "rampStartPressureBar": null,
-            "rampEndPressureBar": 5.0,
-            "rampStartWeightG": 28.0,
-            "rampEndWeightG": 35.0,
-            "rampDurationMs": null,
             "exit": {
-                "mode": "ANY",
-                "weightGte": 32.0,
-                "stageTimeGteMs": null,
-                "flowGte": null,
-                "flowLte": null,
-                "firstDropDetected": false,
-                "manualSkip": false,
-                "safetyTimeout": false
-            },
-            "safety": {
-                "maxStageTimeMs": null,
-                "requireTwoConsecutiveFirstDropReadings": false
-            }
-        },
-        {
-            "name": "Stop",
-            "type": "STOP",
-            "fixedPressureBar": null,
-            "pressureCapBar": null,
-            "targetFlowGps": null,
-            "flowDeadbandGps": null,
-            "pressureStepBar": null,
-            "correctionIntervalMs": null,
-            "rampStartPressureBar": null,
-            "rampEndPressureBar": null,
-            "rampStartWeightG": null,
-            "rampEndWeightG": null,
-            "rampDurationMs": null,
-            "exit": {
-                "mode": "ANY",
-                "weightGte": null,
-                "stageTimeGteMs": 1,
-                "flowGte": null,
-                "flowLte": null,
-                "firstDropDetected": false,
-                "manualSkip": false,
-                "safetyTimeout": false
-            },
-            "safety": {
-                "maxStageTimeMs": null,
-                "requireTwoConsecutiveFirstDropReadings": false
+                "weightGte": 32.0
             }
         }
     ]

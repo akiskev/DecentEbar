@@ -5,7 +5,7 @@ object DefaultProfiles {
         name = "Lever sim 17g in 39g out",
         targetWeightG = 39.0,
         stopOffsetG = 0.9,
-        maxShotTimeMs = 120_000L,
+        maxShotTimeMs = ProfileConstraints.MAX_PROFILE_TIME_MS,
         stages = listOf(
             ProfileStage(
                 name = "Main",

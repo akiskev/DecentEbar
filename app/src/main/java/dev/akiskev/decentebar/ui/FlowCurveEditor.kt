@@ -4,7 +4,6 @@ import android.graphics.Paint
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,9 +13,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,10 +48,12 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.akiskev.decentebar.engine.CurveMath
@@ -151,40 +163,83 @@ internal fun CurveEditorContent(
 
     Surface(modifier = Modifier.fillMaxSize(), color = cs.background) {
         Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-            // One compact top bar: summary readout + mode toggle + edit actions + Cancel/Done.
-            // Landscape is wide but short, so all chrome lives on this row + one slider row; the canvas
-            // takes everything in between.
+            // Keep commit/destructive actions fixed in the visible header; only the summary flexes.
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(summary(points, xMax), style = MaterialTheme.typography.titleSmall, color = cs.primary)
-                Spacer(Modifier.width(8.dp))
+                Text(
+                    summary(points, xMax),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = cs.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 SegmentedChoice(
                     options = CurveMode.entries,
                     selected = mode,
                     onSelected = { mode = it },
-                    label = { if (it == CurveMode.FREEHAND) "Freehand" else "Edit" }
+                    label = { if (it == CurveMode.FREEHAND) "Freehand" else "Edit" },
+                    modifier = Modifier.width(184.dp),
+                    scrollable = false
                 )
-                TextButton(onClick = { undo.removeLastOrNull()?.let { points = it } }, enabled = undo.isNotEmpty()) { Text("Undo") }
-                TextButton(onClick = { commit(listOf(CurvePoint(0.0, yMax * 0.5), CurvePoint(1.0, yMax * 0.5))) }) { Text("Clear") }
-                TextButton(
+                CurveToolButton(
+                    icon = Icons.AutoMirrored.Filled.Undo,
+                    description = "Undo",
+                    enabled = undo.isNotEmpty(),
+                    onClick = { undo.removeLastOrNull()?.let { points = it } }
+                )
+                CurveToolButton(
+                    icon = Icons.Default.Clear,
+                    description = "Clear curve",
+                    onClick = { commit(listOf(CurvePoint(0.0, yMax * 0.5), CurvePoint(1.0, yMax * 0.5))) }
+                )
+                CurveToolButton(
+                    icon = Icons.Default.Delete,
+                    description = "Delete point",
+                    enabled = activePoint != null && points.size > 2,
+                    onClick = { deleteActive() }
+                )
+                TextButton(onClick = onCancel) { Text("Cancel", maxLines = 1) }
+                Button(onClick = { onConfirm(points, xMax, yMax) }) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Done", maxLines = 1)
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                CurveToolButton(
+                    icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    description = "Move point left",
                     onClick = { nudgeActive(-0.01, 0.0) },
                     enabled = activePoint != null && activePoint !in listOf(0, points.lastIndex)
-                ) { Text("X-") }
-                TextButton(
+                )
+                CurveToolButton(
+                    icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    description = "Move point right",
                     onClick = { nudgeActive(0.01, 0.0) },
                     enabled = activePoint != null && activePoint !in listOf(0, points.lastIndex)
-                ) { Text("X+") }
-                TextButton(onClick = { nudgeActive(0.0, yMax * 0.02) }, enabled = activePoint != null) { Text("Y+") }
-                TextButton(onClick = { nudgeActive(0.0, -yMax * 0.02) }, enabled = activePoint != null) { Text("Y-") }
-                TextButton(onClick = { deleteActive() }, enabled = activePoint != null && points.size > 2) { Text("Delete point") }
-                Spacer(Modifier.width(16.dp))
-                TextButton(onClick = onCancel) { Text("Cancel") }
-                Button(onClick = { onConfirm(points, xMax, yMax) }) { Text("Done") }
+                )
+                CurveToolButton(
+                    icon = Icons.Default.KeyboardArrowUp,
+                    description = "Move point up",
+                    onClick = { nudgeActive(0.0, yMax * 0.02) },
+                    enabled = activePoint != null
+                )
+                CurveToolButton(
+                    icon = Icons.Default.KeyboardArrowDown,
+                    description = "Move point down",
+                    onClick = { nudgeActive(0.0, -yMax * 0.02) },
+                    enabled = activePoint != null
+                )
+                Spacer(Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(6.dp))
@@ -310,6 +365,22 @@ internal fun CurveEditorContent(
                 maxLines = 2
             )
         }
+    }
+}
+
+@Composable
+private fun CurveToolButton(
+    icon: ImageVector,
+    description: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(40.dp)
+    ) {
+        Icon(icon, contentDescription = description, modifier = Modifier.size(22.dp))
     }
 }
 

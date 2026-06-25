@@ -35,7 +35,7 @@ data class ShotProfile(
     val name: String,
     val targetWeightG: Double,
     val stopOffsetG: Double,
-    val maxShotTimeMs: Long,
+    val maxShotTimeMs: Long = ProfileConstraints.DEFAULT_MAX_SHOT_TIME_MS,
     val stages: List<ProfileStage>
 )
 

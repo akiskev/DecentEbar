@@ -1,8 +1,12 @@
 package dev.akiskev.decentebar.ui
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -40,6 +44,32 @@ class Material3UiPrimitivesTest {
 
         composeRule.runOnIdle {
             assertEquals("Two", selected)
+        }
+    }
+
+    @Test
+    fun segmentedChoiceCanBeHostedInsideScrollableToolbar() {
+        var selected by mutableStateOf("Edit")
+
+        composeRule.setContent {
+            DecentebarTheme(dynamicColor = false, themeMode = ThemeMode.SYSTEM) {
+                Row(Modifier.horizontalScroll(rememberScrollState())) {
+                    SegmentedChoice(
+                        options = listOf("Freehand", "Edit"),
+                        selected = selected,
+                        onSelected = { selected = it },
+                        label = { it },
+                        scrollable = false
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Freehand").assertIsDisplayed()
+        composeRule.onNodeWithText("Freehand").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals("Freehand", selected)
         }
     }
 

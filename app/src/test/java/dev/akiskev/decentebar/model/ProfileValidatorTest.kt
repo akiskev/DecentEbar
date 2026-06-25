@@ -1,5 +1,9 @@
 package dev.akiskev.decentebar.model
 
+import dev.akiskev.decentebar.storage.JsonCodec
+import dev.akiskev.decentebar.storage.ProfileJsonCodec
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -232,9 +236,9 @@ class ProfileValidatorTest {
     }
 
     @Test
-    fun rejectsProfileMaxShotTimeLowerThanStageMaxTimes() {
+    fun acceptsStageMaxTimeSumAboveHiddenProfileMax() {
         val profile = ShotProfile(
-            name = "bad time cap",
+            name = "stage time caps",
             targetWeightG = 36.0,
             stopOffsetG = 1.0,
             maxShotTimeMs = 20_000L,
@@ -258,7 +262,7 @@ class ProfileValidatorTest {
 
         val errors = ProfileValidator.validate(profile)
 
-        assertTrue(errors.any { it.contains("sum of stage max times") })
+        assertTrue(errors.isEmpty())
     }
 
     @Test
@@ -368,8 +372,246 @@ class ProfileValidatorTest {
         val normalized = ProfileConstraints.normalize(profile)
 
         assertTrue(normalized.stopOffsetG < normalized.targetWeightG)
-        assertTrue(normalized.maxShotTimeMs >= 45_000L)
+        assertEquals(ProfileConstraints.MAX_PROFILE_TIME_MS, normalized.maxShotTimeMs)
         assertTrue(normalized.stages.single().pressureCurve!!.maxWeightG <= normalized.targetWeightG)
         assertTrue(normalized.stages.single().exit.weightGte!! <= normalized.targetWeightG)
+    }
+
+    @Test
+    fun maxShotTimeIsFixedAtMachineLimit() {
+        val profile = ShotProfile(
+            name = "too long",
+            targetWeightG = 33.0,
+            stopOffsetG = 1.0,
+            maxShotTimeMs = 120_000L,
+            stages = listOf(
+                ProfileStage(
+                    name = "Main",
+                    type = StageType.FIXED_PRESSURE,
+                    fixedPressureBar = 4.0,
+                    exit = ExitCondition(stageTimeGteMs = 120_000L),
+                    safety = StageSafety(maxStageTimeMs = 120_000L)
+                )
+            )
+        )
+
+        val normalized = ProfileConstraints.normalize(profile)
+
+        assertEquals(ProfileConstraints.MAX_PROFILE_TIME_MS, normalized.maxShotTimeMs)
+        assertEquals(ProfileConstraints.MAX_PROFILE_TIME_MS, normalized.stages.single().exit.stageTimeGteMs)
+        assertEquals(ProfileConstraints.MAX_PROFILE_TIME_MS, normalized.stages.single().safety.maxStageTimeMs)
+
+        val shortProfile = profile.copy(
+            name = "too short",
+            maxShotTimeMs = 10_000L,
+            stages = profile.stages.map {
+                it.copy(
+                    exit = ExitCondition(stageTimeGteMs = 10_000L),
+                    safety = StageSafety(maxStageTimeMs = 10_000L)
+                )
+            }
+        )
+        assertEquals(ProfileConstraints.MAX_PROFILE_TIME_MS, ProfileConstraints.normalize(shortProfile).maxShotTimeMs)
+    }
+
+    @Test
+    fun profileJsonWithoutMaxShotTimeStillLoads() {
+        val json = """
+            {
+              "schemaVersion": 1,
+              "name": "legacy",
+              "targetWeightG": 33.0,
+              "stopOffsetG": 1.0,
+              "stages": [
+                {
+                  "name": "Main",
+                  "type": "FIXED_PRESSURE",
+                  "fixedPressureBar": 4.0,
+                  "exit": { "stageTimeGteMs": 10000 },
+                  "safety": {}
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val decoded = JsonCodec.json.decodeFromString<ShotProfile>(json)
+        val normalized = ProfileConstraints.normalize(decoded)
+
+        assertEquals(ProfileConstraints.MAX_PROFILE_TIME_MS, normalized.maxShotTimeMs)
+        assertTrue(ProfileValidator.validate(normalized).isEmpty())
+    }
+
+    @Test
+    fun compactProfileExportOmitsDefaultsAndInactiveFields() {
+        val profile = ShotProfile(
+            name = "compact",
+            targetWeightG = 30.0,
+            stopOffsetG = 1.0,
+            maxShotTimeMs = 45_000L,
+            stages = listOf(
+                ProfileStage(
+                    name = "Pre",
+                    type = StageType.FIXED_PRESSURE,
+                    fixedPressureBar = 4.0,
+                    pressureCapBar = 9.0, // stale field from another stage type
+                    exit = ExitCondition(
+                        stageTimeGteMs = 10_000L,
+                        manualSkip = true,
+                        safetyTimeout = true
+                    )
+                ),
+                ProfileStage(
+                    name = "Main",
+                    type = StageType.FLOW_LIMITED_PRESSURE,
+                    pressureCapBar = 9.0,
+                    targetFlowGps = 1.9,
+                    flowDeadbandGps = 0.10000000149011612,
+                    pressureStepBar = 0.2,
+                    correctionIntervalMs = 200L,
+                    pressureStepMultiplierMax = 8.0,
+                    rampEndPressureBar = 5.0, // ignored by FLOW_LIMITED_PRESSURE
+                    feedForward = FeedForwardConfig(),
+                    exit = ExitCondition(weightGte = 30.0)
+                )
+            )
+        )
+
+        val exported = ProfileJsonCodec.encode(profile)
+
+        assertTrue(exported.contains("\"schemaVersion\""))
+        assertFalse(exported.contains("\"maxShotTimeMs\""))
+        assertFalse(exported.contains("\"manualSkip\""))
+        assertFalse(exported.contains("\"safetyTimeout\""))
+        assertFalse(exported.contains("\"flowDeadbandGps\""))
+        assertFalse(exported.contains("\"pressureStepMultiplierMax\""))
+        assertFalse(exported.contains("\"rampEndPressureBar\""))
+        assertTrue(exported.contains("\"pressureStepBar\""))
+        assertTrue(exported.contains("\"correctionIntervalMs\""))
+        assertTrue(exported.contains("\"feedForward\""))
+
+        val normalized = ProfileConstraints.normalize(ProfileJsonCodec.decode(exported))
+
+        assertTrue(ProfileValidator.validate(normalized).isEmpty())
+        val flowStage = normalized.stages.single { it.type == StageType.FLOW_LIMITED_PRESSURE }
+        assertTrue(flowStage.flowDeadbandGps == null)
+        assertEquals(0.2, flowStage.pressureStepBar!!, 0.0)
+        assertEquals(200L, flowStage.correctionIntervalMs)
+        assertTrue(flowStage.feedForward != null)
+    }
+
+    @Test
+    fun compactYieldTimeExportPrunesDefaultsAndKeepsDefaultFeedForwardOptIn() {
+        val profile = ShotProfile(
+            name = "yt compact",
+            targetWeightG = 30.0,
+            stopOffsetG = 1.0,
+            stages = listOf(
+                ProfileStage(
+                    name = "Extraction",
+                    type = StageType.YIELD_TIME_TRAJECTORY,
+                    yieldTime = YieldTimeTrajectoryConfig(
+                        curveType = FlowCurveType.FLAT,
+                        startFlowGps = 9.0,
+                        peakFlowGps = 8.0,
+                        endFlowGps = 7.0,
+                        customPoints = listOf(CurvePoint(0.0, 1.0), CurvePoint(1.0, 1.0)),
+                        minExtractionPressureBar = 2.5,
+                        feedForward = FeedForwardConfig()
+                    ),
+                    exit = ExitCondition(weightGte = 30.0),
+                    safety = StageSafety(requireTwoConsecutiveFirstDropReadings = true)
+                )
+            )
+        )
+
+        val exported = ProfileJsonCodec.encode(profile)
+
+        assertTrue(exported.contains("\"curveType\": \"FLAT\""))
+        assertTrue(exported.contains("\"minExtractionPressureBar\""))
+        assertTrue(exported.contains("\"feedForward\""))
+        assertFalse(exported.contains("\"targetYieldG\""))
+        assertFalse(exported.contains("\"targetDurationS\""))
+        assertFalse(exported.contains("\"startFlowGps\""))
+        assertFalse(exported.contains("\"peakFlowGps\""))
+        assertFalse(exported.contains("\"endFlowGps\""))
+        assertFalse(exported.contains("\"customPoints\""))
+        assertFalse(exported.contains("\"correctionStrength\""))
+
+        val decoded = ProfileJsonCodec.decode(exported)
+        val yieldTime = decoded.stages.single().yieldTime!!
+
+        assertEquals(FlowCurveType.FLAT, yieldTime.curveType)
+        assertEquals(2.5, yieldTime.minExtractionPressureBar, 0.0)
+        assertTrue(yieldTime.feedForward != null)
+        assertTrue(ProfileValidator.validate(ProfileConstraints.normalize(decoded)).isEmpty())
+    }
+
+    @Test
+    fun verboseLegacyProfileWithUnknownFieldsAndStopStillLoads() {
+        val json = """
+            {
+              "schemaVersion": 1,
+              "name": "legacy verbose",
+              "targetWeightG": 33.0,
+              "stopOffsetG": 1.0,
+              "unknownRoot": true,
+              "stages": [
+                {
+                  "name": "Main",
+                  "type": "FIXED_PRESSURE",
+                  "fixedPressureBar": 4.0,
+                  "pressureCapBar": null,
+                  "targetFlowGps": null,
+                  "unknownStage": "ignored",
+                  "exit": {
+                    "mode": "ANY",
+                    "stageTimeGteMs": 10000,
+                    "manualSkip": false,
+                    "safetyTimeout": false
+                  },
+                  "safety": {
+                    "maxStageTimeMs": null,
+                    "requireTwoConsecutiveFirstDropReadings": false
+                  }
+                },
+                {
+                  "name": "Stop",
+                  "type": "STOP",
+                  "exit": { "stageTimeGteMs": 1 }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val normalized = ProfileConstraints.normalize(ProfileJsonCodec.decode(json))
+
+        assertEquals(1, normalized.stages.size)
+        assertEquals(StageType.FIXED_PRESSURE, normalized.stages.single().type)
+        assertTrue(ProfileValidator.validate(normalized).isEmpty())
+    }
+
+    @Test
+    fun validatorRejectsShotTimesAboveMachineLimit() {
+        val profile = ShotProfile(
+            name = "too long",
+            targetWeightG = 33.0,
+            stopOffsetG = 1.0,
+            maxShotTimeMs = 61_000L,
+            stages = listOf(
+                ProfileStage(
+                    name = "Main",
+                    type = StageType.FIXED_PRESSURE,
+                    fixedPressureBar = 4.0,
+                    exit = ExitCondition(stageTimeGteMs = 61_000L),
+                    safety = StageSafety(maxStageTimeMs = 61_000L)
+                )
+            )
+        )
+
+        val errors = ProfileValidator.validate(profile)
+
+        assertTrue(errors.any { it.contains("Max shot time cannot exceed 60s") })
+        assertTrue(errors.any { it.contains("exit time cannot exceed 60s") })
+        assertTrue(errors.any { it.contains("stage max time cannot exceed 60s") })
     }
 }

@@ -1,20 +1,15 @@
 package dev.akiskev.decentebar.model
 
-import kotlin.math.max
-
 object ProfileConstraints {
     const val DEFAULT_TARGET_WEIGHT_G = 33.0
     const val DEFAULT_STOP_OFFSET_G = 1.0
-    const val DEFAULT_MAX_SHOT_TIME_MS = 45_000L
     const val MIN_POSITIVE = 0.1
     const val MIN_TARGET_WEIGHT_G = 0.1
     const val MAX_TARGET_WEIGHT_G = 120.0
-    const val MAX_PROFILE_TIME_MS = 120_000L
+    const val MAX_PROFILE_TIME_MS = 60_000L
+    const val DEFAULT_MAX_SHOT_TIME_MS = MAX_PROFILE_TIME_MS
     const val MAX_PRESSURE_BAR = 12.0
     const val MAX_FLOW_GPS = 8.0
-
-    fun configuredStageMaxTimeMs(profile: ShotProfile): Long =
-        profile.stages.sumOf { it.safety.maxStageTimeMs ?: 0L }
 
     fun yieldTargetSumG(profile: ShotProfile): Double =
         profile.stages.sumOf { stage ->
@@ -45,11 +40,10 @@ object ProfileConstraints {
             }
             normalized
         }
-        val minShotTime = stages.sumOf { it.safety.maxStageTimeMs ?: 0L }
         return profile.copy(
             targetWeightG = target,
             stopOffsetG = stopOffset,
-            maxShotTimeMs = max(profile.maxShotTimeMs, minShotTime).coerceAtLeast(1_000L),
+            maxShotTimeMs = MAX_PROFILE_TIME_MS,
             stages = stages
         )
     }
@@ -57,11 +51,11 @@ object ProfileConstraints {
     private fun normalizeStage(stage: ProfileStage, profileTargetWeightG: Double, remainingYieldG: Double): ProfileStage {
         val exit = stage.exit.copy(
             weightGte = stage.exit.weightGte?.coerceIn(0.0, profileTargetWeightG),
-            stageTimeGteMs = stage.exit.stageTimeGteMs?.coerceAtLeast(1L),
+            stageTimeGteMs = stage.exit.stageTimeGteMs?.coerceIn(1L, MAX_PROFILE_TIME_MS),
             flowGte = stage.exit.flowGte?.coerceIn(0.0, MAX_FLOW_GPS),
             flowLte = stage.exit.flowLte?.coerceIn(0.0, MAX_FLOW_GPS)
         )
-        val safety = stage.safety.copy(maxStageTimeMs = stage.safety.maxStageTimeMs?.coerceAtLeast(1_000L))
+        val safety = stage.safety.copy(maxStageTimeMs = stage.safety.maxStageTimeMs?.coerceIn(1_000L, MAX_PROFILE_TIME_MS))
         val base = stage.copy(exit = exit, safety = safety)
         return when (base.type) {
             StageType.WEIGHT_BASED_PRESSURE_RAMP -> {

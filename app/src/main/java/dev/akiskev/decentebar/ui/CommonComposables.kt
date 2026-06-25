@@ -159,14 +159,20 @@ internal fun <T> SegmentedChoice(
     selected: T,
     onSelected: (T) -> Unit,
     label: (T) -> String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    scrollable: Boolean = true
 ) {
     if (options.isEmpty()) return
     val labeledOptions = options.map { option -> option to label(option) }
-    SingleChoiceSegmentedButtonRow(
-        modifier = modifier
+    val rowModifier = if (scrollable) {
+        modifier
             .horizontalScroll(rememberScrollState())
             .heightIn(min = 48.dp)
+    } else {
+        modifier.heightIn(min = 48.dp)
+    }
+    SingleChoiceSegmentedButtonRow(
+        modifier = rowModifier
     ) {
         labeledOptions.forEachIndexed { index, (option, text) ->
             SegmentedButton(

@@ -47,12 +47,14 @@ class BookooScaleManager(private val context: Context) {
         private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
 
         // Fixed command bytes as documented in the Bookoo Mini protocol spec
+        private val CMD_TARE = byteArrayOf(0x03, 0x0A, 0x01, 0x00, 0x00, 0x08)
         private val CMD_START_TIMER = byteArrayOf(0x03, 0x0A, 0x04, 0x00, 0x00, 0x0A)
         // Flow smoothing on: checksum = 0x03^0x0A^0x08^0x00^0x01 = 0x00
         private val CMD_FLOW_SMOOTHING_ON = byteArrayOf(0x03, 0x0A, 0x08, 0x00, 0x01, 0x00)
 
         // Stop scanning and report failure if no Bookoo scale is found in this window.
         private const val SCAN_TIMEOUT_MS = 15_000L
+        private const val COMMAND_GAP_MS = 150L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -114,6 +116,18 @@ class BookooScaleManager(private val context: Context) {
 
     /** Send start timer command so the scale begins computing flow rate. */
     fun startTimer() = sendCommand(CMD_START_TIMER)
+
+    /** Zero the scale at the current load. */
+    fun tare() = sendCommand(CMD_TARE)
+
+    /** Tare first, then start the scale timer/flow calculation for the shot. */
+    fun prepareForShotStart() {
+        scope.launch {
+            tare()
+            delay(COMMAND_GAP_MS)
+            startTimer()
+        }
+    }
 
     private fun sendCommand(bytes: ByteArray) {
         val g = gatt ?: return

@@ -1,6 +1,8 @@
 package dev.akiskev.decentebar.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,6 +34,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToLong
 
+private val CompactSliderBreakpoint = 320.dp
+
 @Composable
 internal fun SliderField(
     label: String,
@@ -41,6 +45,7 @@ internal fun SliderField(
     unit: String,
     modifier: Modifier = Modifier,
     labelWidth: Dp = 110.dp,
+    unitWidth: Dp = unitColumnWidth(unit),
     decimals: Int = 2,
     onChange: (Double) -> Unit
 ) {
@@ -62,6 +67,7 @@ internal fun SliderField(
         label = label,
         unit = unit,
         labelWidth = labelWidth,
+        unitWidth = unitWidth,
         modifier = modifier
     ) {
         Slider(
@@ -109,6 +115,7 @@ internal fun SliderLongField(
     unit: String,
     modifier: Modifier = Modifier,
     labelWidth: Dp = 110.dp,
+    unitWidth: Dp = unitColumnWidth(unit),
     onChange: (Long) -> Unit
 ) {
     var localText by remember { mutableStateOf(value.toString()) }
@@ -129,6 +136,7 @@ internal fun SliderLongField(
         label = label,
         unit = unit,
         labelWidth = labelWidth,
+        unitWidth = unitWidth,
         modifier = modifier
     ) {
         Slider(
@@ -172,20 +180,49 @@ private fun SliderRow(
     label: String,
     unit: String,
     labelWidth: Dp,
+    unitWidth: Dp,
     modifier: Modifier,
     controls: @Composable RowScope.() -> Unit
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(labelWidth))
-        controls()
-        Text(unit, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(40.dp))
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        if (maxWidth < CompactSliderBreakpoint) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 76.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(label, style = MaterialTheme.typography.labelSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    controls()
+                    Text(unit, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(unitWidth))
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(labelWidth))
+                controls()
+                Text(unit, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(unitWidth))
+            }
+        }
     }
+}
+
+private fun unitColumnWidth(unit: String): Dp = when {
+    unit.isBlank() -> 0.dp
+    unit.length <= 1 -> 20.dp
+    unit.length <= 3 -> 32.dp
+    else -> 44.dp
 }
 
 @Composable
@@ -225,6 +262,7 @@ internal fun SliderDurationField(
     steps: Int,
     modifier: Modifier = Modifier,
     labelWidth: Dp = 110.dp,
+    unitWidth: Dp = unitColumnWidth("s"),
     onChange: (Long) -> Unit
 ) {
     SliderField(
@@ -235,6 +273,7 @@ internal fun SliderDurationField(
         unit = "s",
         modifier = modifier,
         labelWidth = labelWidth,
+        unitWidth = unitWidth,
         decimals = 0,
         onChange = { onChange((it * 1000.0).roundToLong()) }
     )

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,9 +24,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
@@ -37,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -140,19 +145,19 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-    val profilePanelWidth = if (maxWidth < 820.dp) 220.dp else 260.dp
+    val profilePanelWidth = if (maxWidth < 820.dp) 248.dp else 260.dp
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // Left pane: collapsible, hidden by default so stages get full width
         if (showProfilePanel) {
             LazyColumn(
                 modifier = Modifier.width(profilePanelWidth).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                contentPadding = PaddingValues(bottom = 12.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 8.dp)
             ) {
                 item {
                     Panel("Profiles") {
@@ -169,11 +174,38 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                                 )
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Button(onClick = { saveDraft() }, enabled = validationErrors.isEmpty()) { Text("Save") }
-                            OutlinedButton(onClick = viewModel::duplicateSelectedProfile) { Text("Dup") }
-                            OutlinedButton(onClick = viewModel::deleteSelectedProfile) { Text("Del") }
-                            OutlinedButton(onClick = { exportDraft() }, enabled = validationErrors.isEmpty()) { Text("Export") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { saveDraft() },
+                                enabled = validationErrors.isEmpty(),
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Text("Save", maxLines = 1, softWrap = false)
+                            }
+                            OutlinedIconButton(
+                                onClick = viewModel::duplicateSelectedProfile,
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate profile")
+                            }
+                            OutlinedIconButton(
+                                onClick = viewModel::deleteSelectedProfile,
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete profile")
+                            }
+                            OutlinedIconButton(
+                                onClick = { exportDraft() },
+                                enabled = validationErrors.isEmpty(),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(Icons.Default.FileDownload, contentDescription = "Export profile")
+                            }
                         }
                         OutlinedButton(
                             onClick = {
@@ -226,17 +258,6 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                             unit = "g",
                             onChange = { updateEdited(editedProfile.copy(stopOffsetG = it)) }
                         )
-                        val minShotTimeS = maxOf(
-                            1f,
-                            ProfileConstraints.configuredStageMaxTimeMs(editedProfile) / 1000f
-                        )
-                        SliderDurationField(
-                            label = "Max shot time",
-                            valueMs = editedProfile.maxShotTimeMs,
-                            valueRangeSeconds = minShotTimeS..maxOf(120f, minShotTimeS),
-                            steps = 0,
-                            onChange = { updateEdited(editedProfile.copy(maxShotTimeMs = it)) }
-                        )
                         Text(
                             "Stops at ${(editedProfile.targetWeightG - editedProfile.stopOffsetG).formatDecimals(1)} g",
                             style = MaterialTheme.typography.labelSmall,
@@ -253,17 +274,38 @@ internal fun ProfileScreen(state: MainUiState, viewModel: MainViewModel) {
                                 OutlinedButton(onClick = { importText = exportText }) { Text("Use Export") }
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = {
-                                val json = exportDraft()
-                                if (json.isNotBlank()) {
-                                    pendingProfileJson = json
-                                    saveProfileLauncher.launch("${sanitizeFilename(editedProfile.name)}.json")
-                                }
-                            }, enabled = validationErrors.isEmpty()) { Text("Save to File") }
-                            OutlinedButton(onClick = {
-                                loadProfileLauncher.launch(arrayOf("application/json", "*/*"))
-                            }) { Text("Load from File") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val json = exportDraft()
+                                    if (json.isNotBlank()) {
+                                        pendingProfileJson = json
+                                        saveProfileLauncher.launch("${sanitizeFilename(editedProfile.name)}.json")
+                                    }
+                                },
+                                enabled = validationErrors.isEmpty(),
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Save file", maxLines = 1, softWrap = false)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    loadProfileLauncher.launch(arrayOf("application/json", "*/*"))
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 12.dp)
+                            ) {
+                                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Load file", maxLines = 1, softWrap = false)
+                            }
                         }
                         if (state.devMode) {
                             OutlinedTextField(
@@ -916,6 +958,9 @@ private fun StageEditor(
                         )
                     }
                     StageType.PRESSURE_CURVE -> {
+                        val curveControlLabelWidth = 110.dp
+                        val curveControlUnitWidth = 32.dp
+                        val curveControlTrailingWidth = 76.dp + 8.dp + curveControlUnitWidth
                         val pc = stage.pressureCurve ?: PressureCurveConfig(
                             axis = PressureCurveAxis.WEIGHT,
                             points = defaultPressurePoints(),
@@ -956,6 +1001,8 @@ private fun StageEditor(
                                 valueRange = 5f..90f,
                                 steps = 0,
                                 unit = "s",
+                                labelWidth = curveControlLabelWidth,
+                                unitWidth = curveControlUnitWidth,
                                 decimals = 0,
                                 onChange = { v -> updatePc { it.copy(durationS = v) } }
                             )
@@ -966,6 +1013,8 @@ private fun StageEditor(
                                 valueRange = ProfileConstraints.MIN_TARGET_WEIGHT_G.toFloat()..profileTargetWeightG.toFloat(),
                                 steps = 0,
                                 unit = "g",
+                                labelWidth = curveControlLabelWidth,
+                                unitWidth = curveControlUnitWidth,
                                 decimals = 0,
                                 onChange = { v ->
                                     val capped = v.coerceAtMost(profileTargetWeightG)
@@ -984,6 +1033,8 @@ private fun StageEditor(
                             valueRange = 1f..12f,
                             steps = 0,
                             unit = "bar",
+                            labelWidth = curveControlLabelWidth,
+                            unitWidth = curveControlUnitWidth,
                             onChange = { v -> updatePc { it.copy(maxPressureBar = v) } }
                         )
 
@@ -992,9 +1043,11 @@ private fun StageEditor(
                             val previewPts = pc.points.ifEmpty { defaultPressurePoints() }
                                 .map { CurvePoint(it.xPct, it.pressureBar) }
                             Row(
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                Spacer(Modifier.width(curveControlLabelWidth))
                                 CurveThumbnail(
                                     points = previewPts,
                                     yMax = pc.maxPressureBar.coerceAtLeast(0.5),
@@ -1003,12 +1056,20 @@ private fun StageEditor(
                                         .height(64.dp)
                                         .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.small)
                                 )
-                                Column {
+                                Column(modifier = Modifier.width(curveControlTrailingWidth)) {
                                     Text(
                                         "Peak ${(pc.points.maxOfOrNull { it.pressureBar } ?: pc.maxPressureBar).formatDecimals(1)} bar",
-                                        style = MaterialTheme.typography.bodyMedium
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                    OutlinedButton(onClick = onEditCurve) { Text("Edit curve") }
+                                    OutlinedButton(
+                                        onClick = onEditCurve,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentPadding = PaddingValues(horizontal = 8.dp)
+                                    ) {
+                                        Text("Edit curve", maxLines = 1, softWrap = false)
+                                    }
                                 }
                             }
                         }
@@ -1075,7 +1136,7 @@ private fun ExitEditor(
                 OptionalSliderDurationField(
                     label = "Stage time >=",
                     valueMs = exit.stageTimeGteMs,
-                    valueRangeSeconds = 1f..120f,
+                    valueRangeSeconds = 1f..(ProfileConstraints.MAX_PROFILE_TIME_MS / 1000f),
                     steps = 0,
                     defaultValueMs = 5_000L,
                     labelWidth = 80.dp,
@@ -1116,7 +1177,7 @@ private fun SafetyEditor(safety: StageSafety, onSafetyChange: (StageSafety) -> U
         OptionalSliderDurationField(
             label = "Stage max time",
             valueMs = safety.maxStageTimeMs,
-            valueRangeSeconds = 1f..120f,
+            valueRangeSeconds = 1f..(ProfileConstraints.MAX_PROFILE_TIME_MS / 1000f),
             steps = 0,
             defaultValueMs = 20_000L,
             modifier = Modifier.weight(1f),
