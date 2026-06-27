@@ -40,11 +40,11 @@ internal fun AboutScreen(
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Decent E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text("v0.0.6.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Wendougee E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("v0.0.6.1", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Automates espresso pressure profiling on the Decent E-Bar by reading live weight and flow via Android Accessibility and sliding the pressure bar to precise positions.",
+                    "Automates espresso pressure profiling on the Wendougee E-Bar by reading live weight and flow via Android Accessibility and sliding the pressure bar to precise positions.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -72,7 +72,7 @@ internal fun AboutScreen(
                     style = MaterialTheme.typography.bodySmall
                 )
                 TextButton(
-                    onClick = { uriHandler.openUri("mailto:akiskev@gmail.com?subject=Decent%20E-Bar%20Feedback") },
+                    onClick = { uriHandler.openUri("mailto:akiskev@gmail.com?subject=Wendougee%20E-Bar%20Feedback") },
                     contentPadding = PaddingValues(0.dp)
                 ) {
                     Text("akiskev@gmail.com", style = MaterialTheme.typography.bodySmall)

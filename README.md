@@ -1,8 +1,8 @@
-# Decent E-Bar
+# Wendougee E-Bar
 
-**Version 0.0.6.0**
+**Version 0.0.6.1**
 
-Android AccessibilityService controller for the Decent Espresso E-Bar — automates pressure profiling by reading live weight and flow from the E-Bar screen and commanding pressure via gesture swipes on the pressure slider, targeting a calibrated LUT. Optionally connects directly to a **Bookoo Mini scale over BLE** for ultra-fast weight and flow readings.
+Android AccessibilityService controller for the Wendougee E-Bar — automates pressure profiling by reading live weight and flow from the E-Bar screen and commanding pressure via gesture swipes on the pressure slider, targeting a calibrated LUT. Optionally connects directly to a **Bookoo Mini scale over BLE** for ultra-fast weight and flow readings.
 
 ## Features
 
@@ -38,7 +38,7 @@ Android AccessibilityService controller for the Decent Espresso E-Bar — automa
 
 ## UI
 
-Landscape-only. NavigationRail-style rail on the left. `0.0.6.0` keeps the day-to-day workflow focused on Control, Profile, Log, and About; **Developer Mode** in About reveals the advanced LUT/Debug tools and raw JSON panes.
+Landscape-only. NavigationRail-style rail on the left. `0.0.6.1` keeps the day-to-day workflow focused on Control, Profile, Log, and About; **Developer Mode** in About reveals the advanced LUT/Debug tools and raw JSON panes.
 
 | Rail item | Contents |
 |-----|----------|
@@ -87,7 +87,7 @@ One built-in profile is bundled with the app. It is seeded on first run and re-s
 ## Setup
 
 1. Open the project in Android Studio and build/install the app.
-2. On the device, go to **Settings → Accessibility** and enable *Decent E-Bar*.
+2. On the device, go to **Settings → Accessibility** and enable *Wendougee E-Bar*.
 3. Select the bundled **Lever sim 17g in 39g out** profile or create/import a profile in the **Profile** tab, then tap **Save**. The pressure LUT is built-in and auto-anchors to the live bar — no import needed.
 4. *(Optional)* In the **Control** tab, tap **Scale** to connect a Bookoo Mini scale over BLE for faster weight and flow readings.
 5. *(Optional)* Open **About** and enable **Developer Mode** if you need LUT calibration, Debug, raw profile JSON, or full shot-log import/export tools.

@@ -13,10 +13,17 @@ import kotlin.math.max
 
 object ShotVideoExporter {
 
-    enum class Format(val label: String, val width: Int, val height: Int) {
-        LANDSCAPE("16:9  1920×1080", 1920, 1080),
-        SQUARE("1:1   1080×1080", 1080, 1080),
-        PORTRAIT("9:16  1080×1920", 1080, 1920)
+    enum class Format(
+        val label: String,
+        val width: Int,
+        val height: Int,
+        val layout: ShotFrameRenderer.Layout = ShotFrameRenderer.Layout.ANALYTICS,
+        val filenameSuffix: String = ""
+    ) {
+        LANDSCAPE("16:9 1920x1080", 1920, 1080),
+        SQUARE("1:1 1080x1080", 1080, 1080),
+        PORTRAIT("9:16 1080x1920", 1080, 1920),
+        YOUTUBE_PIP("YT PIP 1920x1080", 1920, 1080, ShotFrameRenderer.Layout.YOUTUBE_PIP, "-yt-pip")
     }
 
     fun export(
@@ -27,7 +34,7 @@ object ShotVideoExporter {
         fps: Int = 30,
         onProgress: (Float) -> Unit
     ) {
-        val renderer = ShotFrameRenderer(log, format.width, format.height)
+        val renderer = ShotFrameRenderer(log, format.width, format.height, format.layout)
         val durationMs = max(1L, (log.stoppedAtMs ?: 0L) - (log.startedAtMs ?: 0L))
             .coerceAtLeast(log.samples.lastOrNull()?.timeMs ?: 1L)
         val totalFrames = (durationMs * fps / 1000L).toInt().coerceAtLeast(1)
@@ -169,10 +176,10 @@ object ShotVideoExporter {
                 val r = (px shr 16) and 0xff
                 val g = (px shr 8) and 0xff
                 val b = px and 0xff
-                out[yOff++] = (((66 * r + 129 * g + 25 * b + 128) ushr 8) + 16).coerceIn(16, 235).toByte()
+                out[yOff++] = (((66 * r + 129 * g + 25 * b + 128) shr 8) + 16).coerceIn(16, 235).toByte()
                 if (row % 2 == 0 && col % 2 == 0) {
-                    out[uvOff++] = (((-38 * r - 74 * g + 112 * b + 128) ushr 8) + 128).coerceIn(16, 240).toByte()
-                    out[uvOff++] = (((112 * r - 94 * g - 18 * b + 128) ushr 8) + 128).coerceIn(16, 240).toByte()
+                    out[uvOff++] = (((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128).coerceIn(16, 240).toByte()
+                    out[uvOff++] = (((112 * r - 94 * g - 18 * b + 128) shr 8) + 128).coerceIn(16, 240).toByte()
                 }
             }
         }

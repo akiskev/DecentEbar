@@ -95,7 +95,7 @@ internal fun AccessibilityWarningBanner(onEnable: () -> Unit, modifier: Modifier
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )
                 Text(
-                    "DecentEbar can't read or control the E-Bar until you enable it in Accessibility settings.",
+                    "DecentEBar can't read or control the E-Bar until you enable it in Accessibility settings.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )

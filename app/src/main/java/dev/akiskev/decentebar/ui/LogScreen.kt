@@ -198,7 +198,7 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                     hasData = state.samples.isNotEmpty(),
                     onExport = { fmt ->
                         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-                        val base = "${sanitizeFilename(state.selectedProfile.name)}-$ts"
+                        val base = "${sanitizeFilename(state.selectedProfile.name)}-$ts${fmt.filenameSuffix}"
                         pendingVideoFormat = fmt
                         saveVideoLauncher.launch("$base.mp4")
                     }
@@ -251,7 +251,7 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                         hasData = true,
                         onExport = { fmt ->
                             val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-                            val base = "${sanitizeFilename(importedLog.profileName)}-$ts"
+                            val base = "${sanitizeFilename(importedLog.profileName)}-$ts${fmt.filenameSuffix}"
                             pendingImportedVideoFormat = fmt
                             saveImportedVideoLauncher.launch("$base.mp4")
                         }
