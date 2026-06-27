@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Decent E-Bar</string>
-    <string name="accessibility_service_label">Wendougee E-Bar Controller</string>
+    <string name="accessibility_service_label">Decent E-Bar Controller</string>
     <string name="accessibility_service_description">Reads E-Bar shot screen values and dispatches safe pressure and stop gestures while armed.</string>
 </resources>

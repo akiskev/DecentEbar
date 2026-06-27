@@ -40,7 +40,7 @@ internal fun AboutScreen(
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Wendougee E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("Decent E-Bar", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 Text("v0.0.6.1", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 Text(
