@@ -1,4 +1,4 @@
-# Wendougee E-Bar
+# Decent E-Bar
 
 **Version 0.0.6.1**
 
@@ -42,7 +42,7 @@ Landscape-only. NavigationRail-style rail on the left. `0.0.6.1` keeps the day-t
 
 | Rail item | Contents |
 |-----|----------|
-| **Control** | Arm / Disarm / E-Stop / Skip Stage / Scale connect button, 17-metric live status grid including scale connection state and battery |
+| **Control** | Arm / Disarm / E-Stop and the Bookoo scale connect button, plus a compact status grid (service state, scale battery, safety status) |
 | **Profile** | Full-width stage editor with a collapsible profile panel; sliders for numeric fields; yield/time and pressure-curve stages show an inline preview and open the full-screen curve editor; profile CRUD plus Save/Load JSON file actions; exported profiles are compact JSON; raw JSON import/export fields are shown in Developer Mode |
 | **Log** | Shot events, sample counts, and "Save to File" export; saving requires beans, grind, and dose so JSON/HTML logs are useful for analysis; aspect-ratio selector and "Save Video" button for MP4 export with progress bar; Developer Mode adds raw JSON export, log import, imported-log re-export, and recent-sample inspection |
 | **About** | Version, safety notice, feedback/support links, donation links, and the Developer Mode switch |
@@ -54,7 +54,7 @@ All numeric parameters use a slider with an inline editable text field for preci
 
 ## Bookoo Mini scale
 
-Tap **Scale** in the Control tab to scan and connect. The app requests the necessary Bluetooth permissions on first use. Once connected:
+Tap **Connect to Bookoo scale** in the Control tab to scan and connect. The app requests the necessary Bluetooth permissions on first use. Once connected:
 
 - Weight and flow are sourced directly from the scale at hardware notification rate (~10–20 Hz) rather than from the E-Bar screen (~2 Hz accessibility polling).
 - Flow smoothing is enabled on the scale automatically at connect time.
@@ -87,9 +87,9 @@ One built-in profile is bundled with the app. It is seeded on first run and re-s
 ## Setup
 
 1. Open the project in Android Studio and build/install the app.
-2. On the device, go to **Settings → Accessibility** and enable *Wendougee E-Bar*.
+2. On the device, go to **Settings → Accessibility** and enable *Decent E-Bar Controller*.
 3. Select the bundled **Lever sim 17g in 39g out** profile or create/import a profile in the **Profile** tab, then tap **Save**. The pressure LUT is built-in and auto-anchors to the live bar — no import needed.
-4. *(Optional)* In the **Control** tab, tap **Scale** to connect a Bookoo Mini scale over BLE for faster weight and flow readings.
+4. *(Optional)* In the **Control** tab, tap **Connect to Bookoo scale** to connect a Bookoo Mini scale over BLE for faster weight and flow readings.
 5. *(Optional)* Open **About** and enable **Developer Mode** if you need LUT calibration, Debug, raw profile JSON, or full shot-log import/export tools.
 6. Tap **Arm**, then start a shot in the E-Bar app — the controller takes over automatically.
 

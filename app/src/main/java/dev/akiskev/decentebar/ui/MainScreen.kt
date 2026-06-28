@@ -213,11 +213,19 @@ fun MainScreen(
                         themeMode = state.themeMode,
                         onThemeModeChange = viewModel::setThemeMode,
                         devMode = state.devMode,
-                        onDevModeChange = viewModel::setDevMode
+                        onDevModeChange = viewModel::setDevMode,
+                        onOpenTutorial = viewModel::openTutorial
                     )
                 }
             }
         }
+    }
+
+    if (state.tutorialVisible) {
+        FirstUseTutorialDialog(
+            onSkip = viewModel::skipTutorial,
+            onDone = viewModel::completeTutorial
+        )
     }
 }
 

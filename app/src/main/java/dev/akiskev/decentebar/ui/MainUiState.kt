@@ -49,6 +49,7 @@ data class MainUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** When off, developer-only UI (LUT/Debug tabs, raw JSON I/O, log export tools) is hidden. */
     val devMode: Boolean = false,
+    val tutorialVisible: Boolean = false,
 ) {
     val isArmed: Boolean
         get() = controllerState == ControllerState.ARMED ||

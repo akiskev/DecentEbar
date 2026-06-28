@@ -79,7 +79,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lutValidation = controller.validateLut(it.snapshot, lut, requireForegroundPackage = false),
                 exportedLutJson = "",
                 themeMode = loadThemeMode(),
-                devMode = settingsPrefs.getBoolean(KEY_DEV_MODE, false)
+                devMode = settingsPrefs.getBoolean(KEY_DEV_MODE, false),
+                tutorialVisible = !settingsPrefs.getBoolean(KEY_FIRST_USE_TUTORIAL_SEEN_V1, false)
             )
         }
 
@@ -131,6 +132,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setThemeMode(mode: ThemeMode) {
         settingsPrefs.edit().putString(KEY_THEME_MODE, mode.name).apply()
         _uiState.update { it.copy(themeMode = mode) }
+    }
+
+    fun openTutorial() {
+        _uiState.update { it.copy(tutorialVisible = true) }
+    }
+
+    fun completeTutorial() {
+        markTutorialSeen()
+    }
+
+    fun skipTutorial() {
+        markTutorialSeen()
+    }
+
+    private fun markTutorialSeen() {
+        settingsPrefs.edit().putBoolean(KEY_FIRST_USE_TUTORIAL_SEEN_V1, true).apply()
+        _uiState.update { it.copy(tutorialVisible = false) }
     }
 
     private fun loadThemeMode(): ThemeMode {
@@ -515,5 +533,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val CALIBRATION_HOP_PX = 100f
         const val KEY_DEV_MODE = "dev_mode"
         const val KEY_THEME_MODE = "theme_mode"
+        const val KEY_FIRST_USE_TUTORIAL_SEEN_V1 = "first_use_tutorial_seen_v1"
     }
 }

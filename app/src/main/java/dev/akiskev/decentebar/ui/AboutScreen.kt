@@ -29,7 +29,8 @@ internal fun AboutScreen(
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
     devMode: Boolean,
-    onDevModeChange: (Boolean) -> Unit
+    onDevModeChange: (Boolean) -> Unit,
+    onOpenTutorial: () -> Unit
 ) {
     val uriHandler = LocalUriHandler.current
     LazyColumn(
@@ -66,13 +67,35 @@ internal fun AboutScreen(
         }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("First-use tutorial", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Review the setup flow for Accessibility, profiles, scale connection, arming, stopping, and shot logs.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onOpenTutorial) {
+                        Text("Open tutorial")
+                    }
+                    TextButton(
+                        onClick = { uriHandler.openUri(FIRST_USE_TUTORIAL_VIDEO_URL) }
+                    ) {
+                        Text("Watch reference video")
+                    }
+                }
+            }
+        }
+        item {
+            HorizontalDivider()
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Feedback & Support", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Text(
                     "This is a beta release. Bugs, unexpected behaviour, and profile sharing are all welcome — please include an exported shot log when reporting issues.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 TextButton(
-                    onClick = { uriHandler.openUri("mailto:akiskev@gmail.com?subject=Wendougee%20E-Bar%20Feedback") },
+                    onClick = { uriHandler.openUri("mailto:akiskev@gmail.com?subject=Decent%20E-Bar%20Feedback") },
                     contentPadding = PaddingValues(0.dp)
                 ) {
                     Text("akiskev@gmail.com", style = MaterialTheme.typography.bodySmall)
