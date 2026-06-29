@@ -10,6 +10,7 @@ import dev.akiskev.decentebar.ble.BookooScaleManager
 import dev.akiskev.decentebar.engine.FlowEstimator
 import dev.akiskev.decentebar.engine.PressureLutManager
 import dev.akiskev.decentebar.model.BuiltInPressureLut
+import dev.akiskev.decentebar.model.ControllerState
 import dev.akiskev.decentebar.model.DefaultProfiles
 import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.PressureLut
@@ -18,9 +19,13 @@ import dev.akiskev.decentebar.model.ProfileValidator
 import dev.akiskev.decentebar.model.SafetyConfig
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
+import dev.akiskev.decentebar.model.ShotTargetResolver
 import dev.akiskev.decentebar.storage.JsonCodec
 import dev.akiskev.decentebar.storage.ProfileRepository
+import dev.akiskev.decentebar.storage.ShotLibraryRepository
 import dev.akiskev.decentebar.storage.ShotLogCodec
+import dev.akiskev.decentebar.storage.ShotShareExporter
+import dev.akiskev.decentebar.storage.ShotShareFormat
 import dev.akiskev.decentebar.storage.ShotVideoExporter
 import dev.akiskev.decentebar.util.screenSizePx
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +33,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,7 +46,12 @@ data class ShotMetadata(
     val beansName: String,
     val grindSetting: String,
     val doseG: Double?,
-    val notes: String
+    val roastLevel: String,
+    val basket: String,
+    val targetYieldG: Double?,
+    val targetTimeS: Double?,
+    val tasteNotes: String,
+    val rating: Int?
 )
 
 /**
@@ -51,12 +63,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val safetyConfig = SafetyConfig()
     private val settingsPrefs = application.getSharedPreferences("settings", Application.MODE_PRIVATE)
     private val profileRepository = ProfileRepository(application)
+    private val shotLibraryRepository = ShotLibraryRepository(application)
     private val lutManager = PressureLutManager(safetyConfig)
     private val flowEstimator = FlowEstimator(safetyConfig.maxFlowGps)
     private val scaleManager = BookooScaleManager(application)
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
+    // "Save to library?" prompt wiring. A shot is pulled with the E-Bar app in the foreground, so
+    // DecentEbar is backgrounded while it runs. When the shot reaches STOPPED with recorded data we
+    // latch [shotPendingSavePrompt]; the prompt is then shown the next time the user brings
+    // DecentEbar back to the foreground (or immediately if it already is).
+    private var appInForeground = false
+    private var shotPendingSavePrompt = false
 
     private val controller = ShotController(
         state = _uiState,
@@ -67,14 +87,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     init {
+        ShotShareExporter.clearShareCache(application)
         val profiles = profileRepository.loadProfiles()
         val selected = profiles.firstOrNull() ?: DefaultProfiles.fallbackProfile
+        val libraryEntries = shotLibraryRepository.loadEntries()
         val (initW, initH) = screenSizePx(application)
         val lut = BuiltInPressureLut.buildFor(initW, initH)
         _uiState.update {
             it.copy(
                 profiles = profiles,
                 selectedProfile = selected,
+                libraryEntries = libraryEntries,
+                selectedLibraryShotId = libraryEntries.firstOrNull()?.shotId,
+                selectedLibraryShot = libraryEntries.firstOrNull()?.let { entry ->
+                    shotLibraryRepository.getShot(entry.shotId)
+                },
                 loadedLut = lut,
                 lutValidation = controller.validateLut(it.snapshot, lut, requireForegroundPackage = false),
                 exportedLutJson = "",
@@ -105,6 +132,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             scaleManager.latestReading.filterNotNull().collect(controller::onScaleReading)
         }
+
+        // Detect a finished pull: when the controller settles into STOPPED with recorded samples,
+        // arm the "Save to library?" prompt (shown on return to foreground).
+        viewModelScope.launch {
+            _uiState
+                .map { it.controllerState }
+                .distinctUntilChanged()
+                .collect { controllerState ->
+                    if (controllerState == ControllerState.STOPPED && _uiState.value.samples.isNotEmpty()) {
+                        shotPendingSavePrompt = true
+                        showLibrarySavePromptIfPending()
+                    }
+                }
+        }
     }
 
     override fun onCleared() {
@@ -122,6 +163,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshServiceEnabled() {
         val enabled = EbarAccessibilityService.isEnabledInSettings(getApplication())
         _uiState.update { it.copy(serviceEnabled = enabled) }
+    }
+
+    /** Called from the Activity on resume: surface a pending post-shot save prompt, if any. */
+    fun onAppForegrounded() {
+        appInForeground = true
+        showLibrarySavePromptIfPending()
+    }
+
+    /** Called from the Activity on pause: a shot finishing now will prompt on the next resume. */
+    fun onAppBackgrounded() {
+        appInForeground = false
+    }
+
+    private fun showLibrarySavePromptIfPending() {
+        if (appInForeground && shotPendingSavePrompt && _uiState.value.samples.isNotEmpty()) {
+            shotPendingSavePrompt = false
+            _uiState.update { it.copy(librarySavePromptVisible = true) }
+        }
+    }
+
+    fun dismissLibrarySavePrompt() {
+        _uiState.update { it.copy(librarySavePromptVisible = false) }
     }
 
     fun setDevMode(enabled: Boolean) {
@@ -158,7 +221,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Shot controls (delegated) ---
 
-    fun arm() = controller.arm()
+    fun arm() {
+        // Starting a new shot supersedes any unsaved-shot prompt from the previous pull.
+        shotPendingSavePrompt = false
+        controller.arm()
+    }
 
     fun disarm() = controller.disarm()
 
@@ -191,6 +258,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Flow source: samples carry altFlowGps (the parallel software estimate) only when the
         // BLE scale drove the loop, so it's a reliable during-shot indicator of the data source.
         val scaleDriven = state.samples.any { it.altFlowGps != null }
+        val targets = metadata?.let {
+            ShotTargetResolver.resolve(
+                profile = state.selectedProfile,
+                userTargetYieldG = it.targetYieldG,
+                userTargetTimeS = it.targetTimeS
+            )
+        }
         return ShotLog(
             profileName = state.selectedProfile.name,
             startedAtMs = controller.shotStartMs,
@@ -201,7 +275,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             beansName = metadata?.beansName?.takeIf { it.isNotBlank() },
             grindSetting = metadata?.grindSetting?.takeIf { it.isNotBlank() },
             doseG = metadata?.doseG,
-            notes = metadata?.notes?.takeIf { it.isNotBlank() },
+            roastLevel = metadata?.roastLevel?.takeIf { it.isNotBlank() },
+            basket = metadata?.basket?.takeIf { it.isNotBlank() },
+            targetYieldG = targets?.targetYieldG,
+            targetTimeS = targets?.targetTimeS,
+            tasteNotes = metadata?.tasteNotes?.takeIf { it.isNotBlank() },
+            rating = metadata?.rating?.coerceIn(1, 5),
             appVersion = appVersionName(),
             flowSource = if (scaleDriven) "scale" else "accessibility",
             scaleBatteryPercent = if (scaleDriven) state.scaleBatteryPercent else null,
@@ -228,6 +307,211 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val encoded = ShotLogCodec.encode(log)
         _uiState.update { it.copy(exportedLogJson = encoded) }
         return encoded
+    }
+
+    fun saveCurrentShotToLibrary(metadata: ShotMetadata) {
+        val log = currentShotLog(metadata) ?: run {
+            _uiState.update { it.copy(logMessage = "No shot data to save") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { shotLibraryRepository.saveShot(log) }
+            _uiState.update { state ->
+                result.fold(
+                    onSuccess = { entry ->
+                        val entries = shotLibraryRepository.loadEntries()
+                        state.copy(
+                            libraryEntries = entries,
+                            selectedLibraryShotId = entry.shotId,
+                            selectedLibraryShot = shotLibraryRepository.getShot(entry.shotId),
+                            logMessage = "Saved to Shot Library",
+                            libraryMessage = "Saved ${entry.beansName ?: entry.profileName}"
+                        )
+                    },
+                    onFailure = { error ->
+                        state.copy(logMessage = "Library save failed: ${error.message}")
+                    }
+                )
+            }
+        }
+    }
+
+    fun saveImportedShotToLibrary() {
+        val log = _uiState.value.importedShotLog ?: run {
+            _uiState.update { it.copy(importShotLogMessage = "No imported shot to save") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { shotLibraryRepository.saveShot(log) }
+            _uiState.update { state ->
+                result.fold(
+                    onSuccess = { entry ->
+                        val entries = shotLibraryRepository.loadEntries()
+                        state.copy(
+                            libraryEntries = entries,
+                            selectedLibraryShotId = entry.shotId,
+                            selectedLibraryShot = shotLibraryRepository.getShot(entry.shotId),
+                            importShotLogMessage = "Saved imported shot to Library",
+                            libraryMessage = "Saved ${entry.beansName ?: entry.profileName}"
+                        )
+                    },
+                    onFailure = { error ->
+                        state.copy(importShotLogMessage = "Library save failed: ${error.message}")
+                    }
+                )
+            }
+        }
+    }
+
+    fun selectLibraryShot(shotId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val log = shotLibraryRepository.getShot(shotId)
+            _uiState.update {
+                it.copy(
+                    selectedLibraryShotId = shotId,
+                    selectedLibraryShot = log,
+                    libraryMessage = if (log == null) "Shot not found" else ""
+                )
+            }
+        }
+    }
+
+    fun loadLibraryCompareShots(shotIds: List<String>) {
+        val ids = shotIds.distinct().take(2)
+        if (ids.size != 2) {
+            _uiState.update { it.copy(libraryCompareShots = emptyMap()) }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val shots = ids.mapNotNull { id ->
+                shotLibraryRepository.getShot(id)?.let { log -> id to log }
+            }.toMap()
+            _uiState.update {
+                it.copy(
+                    libraryCompareShots = shots,
+                    libraryMessage = if (shots.size == 2) "" else "Compare shots not found"
+                )
+            }
+        }
+    }
+
+    fun clearLibraryCompareShots() {
+        _uiState.update { it.copy(libraryCompareShots = emptyMap()) }
+    }
+
+    fun deleteLibraryShot(shotId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val entries = shotLibraryRepository.deleteShot(shotId)
+            val selected = entries.firstOrNull()
+            _uiState.update {
+                it.copy(
+                    libraryEntries = entries,
+                    selectedLibraryShotId = selected?.shotId,
+                    selectedLibraryShot = selected?.let { entry -> shotLibraryRepository.getShot(entry.shotId) },
+                    libraryCompareShots = it.libraryCompareShots - shotId,
+                    libraryMessage = "Deleted shot"
+                )
+            }
+        }
+    }
+
+    fun setLibraryShotBest(shotId: String, best: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val update = shotLibraryRepository.setBestForBean(shotId, best)
+            val selected = update.selectedShot
+            val scopeName = selected?.beansName?.takeIf { it.isNotBlank() } ?: "this bean"
+            val replaced = update.replaced?.beansName?.takeIf { it.isNotBlank() }
+            val message = when {
+                selected == null -> "Shot not found"
+                best && replaced != null -> "Best updated for $scopeName; replaced $replaced"
+                best -> "Marked best for $scopeName"
+                else -> "Best marker cleared"
+            }
+            _uiState.update {
+                it.copy(
+                    libraryEntries = update.entries,
+                    selectedLibraryShotId = selected?.shotId ?: it.selectedLibraryShotId,
+                    selectedLibraryShot = selected ?: it.selectedLibraryShot,
+                    libraryMessage = message
+                )
+            }
+        }
+    }
+
+    fun shareLibraryShot(shotId: String, format: ShotShareFormat) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val log = shotLibraryRepository.getShot(shotId)
+            if (log == null) {
+                _uiState.update { it.copy(libraryMessage = "Shot not found") }
+                return@launch
+            }
+            val result = runCatching {
+                ShotShareExporter.createShareFile(getApplication(), log, format)
+            }
+            _uiState.update { state ->
+                result.fold(
+                    onSuccess = { share ->
+                        state.copy(
+                            pendingShare = SharePayload(
+                                uri = share.uri,
+                                mimeType = share.mimeType,
+                                subject = share.subject
+                            ),
+                            libraryMessage = "Prepared ${format.label} share"
+                        )
+                    },
+                    onFailure = { error ->
+                        state.copy(libraryMessage = "Share failed: ${error.message}")
+                    }
+                )
+            }
+        }
+    }
+
+    fun shareLibraryComparison(shotIds: List<String>, format: ShotShareFormat) {
+        val ids = shotIds.distinct().take(2)
+        if (ids.size != 2) {
+            _uiState.update { it.copy(libraryMessage = "Select two shots to compare") }
+            return
+        }
+        if (format == ShotShareFormat.JSON) {
+            _uiState.update { it.copy(libraryMessage = "Compare share supports PNG and HTML") }
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val shotA = shotLibraryRepository.getShot(ids[0])
+            val shotB = shotLibraryRepository.getShot(ids[1])
+            if (shotA == null || shotB == null) {
+                _uiState.update { it.copy(libraryMessage = "Compare shots not found") }
+                return@launch
+            }
+            val result = runCatching {
+                ShotShareExporter.createCompareShareFile(getApplication(), shotA, shotB, format)
+            }
+            _uiState.update { state ->
+                result.fold(
+                    onSuccess = { share ->
+                        state.copy(
+                            pendingShare = SharePayload(
+                                uri = share.uri,
+                                mimeType = share.mimeType,
+                                subject = share.subject,
+                                chooserTitle = "Share comparison"
+                            ),
+                            libraryMessage = "Prepared compare ${format.label} share"
+                        )
+                    },
+                    onFailure = { error ->
+                        state.copy(libraryMessage = "Compare share failed: ${error.message}")
+                    }
+                )
+            }
+        }
+    }
+
+    fun clearPendingShare() {
+        _uiState.update { it.copy(pendingShare = null) }
     }
 
     fun exportShotVideo(uri: Uri, format: ShotVideoExporter.Format, log: ShotLog? = null) {
@@ -305,6 +589,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setLogMessage(msg: String) {
         _uiState.update { it.copy(logMessage = msg) }
+    }
+
+    fun setLibraryMessage(msg: String) {
+        _uiState.update { it.copy(libraryMessage = msg) }
     }
 
     fun selectProfile(name: String) {

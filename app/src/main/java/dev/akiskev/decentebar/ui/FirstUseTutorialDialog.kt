@@ -53,7 +53,7 @@ internal val FirstUseTutorialSteps = listOf(
     ),
     FirstUseTutorialStep(
         title = "Run, stop, and review",
-        body = "Tap Arm, then start the shot in the E-Bar app. Use E-Stop or Disarm when needed, then review or export the shot log from the Log tab. You can review this tutorial any time from About > First-use tutorial."
+        body = "Tap Arm, then start the shot in the E-Bar app. Use E-Stop or Disarm when needed, then save the shot from the Log tab and review it in Library. You can review this tutorial any time from About > First-use tutorial."
     )
 )
 

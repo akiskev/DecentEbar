@@ -49,7 +49,15 @@ private fun AppEntry(viewModel: MainViewModel = viewModel()) {
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshServiceEnabled()
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    viewModel.refreshServiceEnabled()
+                    // Returning from a shot (pulled with the E-Bar app in front) — prompt to save it.
+                    viewModel.onAppForegrounded()
+                }
+                Lifecycle.Event.ON_PAUSE -> viewModel.onAppBackgrounded()
+                else -> Unit
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }

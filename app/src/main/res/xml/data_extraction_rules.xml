@@ -2,8 +2,10 @@
 <data-extraction-rules>
     <cloud-backup>
         <include domain="sharedpref" path="." />
+        <include domain="file" path="shot-library/" />
     </cloud-backup>
     <device-transfer>
         <include domain="sharedpref" path="." />
+        <include domain="file" path="shot-library/" />
     </device-transfer>
 </data-extraction-rules>

@@ -42,6 +42,7 @@ internal fun Panel(
     title: String,
     modifier: Modifier = Modifier,
     fillContent: Boolean = false,
+    showTitle: Boolean = true,
     content: @Composable () -> Unit
 ) {
     Card(
@@ -50,16 +51,24 @@ internal fun Panel(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         if (fillContent) {
-            Column(Modifier.padding(14.dp).fillMaxSize()) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
+            Column(
+                Modifier
+                    .padding(14.dp)
+                    .fillMaxSize()
+            ) {
+                if (showTitle) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(8.dp))
+                }
                 Box(Modifier.weight(1f)) {
                     content()
                 }
             }
         } else {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (showTitle) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
                 content()
             }
         }

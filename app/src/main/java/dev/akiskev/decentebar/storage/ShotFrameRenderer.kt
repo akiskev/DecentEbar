@@ -72,7 +72,7 @@ private object DashboardColors {
 }
 
 private enum class PhaseState { PAST, ACTIVE, FUTURE }
-private const val SIGNATURE = "akiskev.dev"
+private const val SIGNATURE = "Made with Decent E-Bar"
 
 class ShotFrameRenderer(
     private val log: ShotLog,

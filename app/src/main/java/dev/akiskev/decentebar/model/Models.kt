@@ -306,6 +306,15 @@ data class ShotLog(
     val grindSetting: String? = null,
     val doseG: Double? = null,
     val notes: String? = null,
+    val shotId: String? = null,
+    val savedAtMs: Long? = null,
+    val roastLevel: String? = null,
+    val basket: String? = null,
+    val targetYieldG: Double? = null,
+    val targetTimeS: Double? = null,
+    val tasteNotes: String? = null,
+    val rating: Int? = null,
+    val bestForBean: Boolean = false,
     // Auto-captured context for reproducibility (docs/puck-resistance-feedforward.md Tier 1).
     val appVersion: String? = null,
     val flowSource: String? = null,        // "scale" (BLE) or "accessibility" (estimated)
@@ -314,6 +323,52 @@ data class ShotLog(
     // so a shot is fully reproducible (profileName above is kept for convenience).
     val profile: ShotProfile? = null
 )
+
+@Serializable
+data class ShotLibraryEntry(
+    val shotId: String,
+    val savedAtMs: Long,
+    val startedAtMs: Long?,
+    val profileName: String,
+    val beansName: String?,
+    val normalizedBean: String,
+    val doseG: Double?,
+    val grindSetting: String?,
+    val roastLevel: String?,
+    val basket: String?,
+    val rating: Int?,
+    val bestForBean: Boolean = false,
+    val finalYieldG: Double?,
+    val durationMs: Long?,
+    val sampleCount: Int,
+    val eventCount: Int,
+    val flowSource: String?,
+    val targetYieldG: Double?,
+    val targetTimeS: Double?,
+    val exportedAtMs: Long? = null
+)
+
+data class ResolvedShotTargets(
+    val targetYieldG: Double?,
+    val targetTimeS: Double?
+)
+
+object ShotTargetResolver {
+    fun resolve(
+        profile: ShotProfile,
+        userTargetYieldG: Double? = null,
+        userTargetTimeS: Double? = null
+    ): ResolvedShotTargets {
+        val yieldTime = profile.stages.firstNotNullOfOrNull { it.yieldTime }
+        return ResolvedShotTargets(
+            targetYieldG = yieldTime?.targetYieldG
+                ?: profile.targetWeightG.takeIf { it > 0.0 }
+                ?: userTargetYieldG?.takeIf { it > 0.0 },
+            targetTimeS = yieldTime?.targetDurationS
+                ?: userTargetTimeS?.takeIf { it > 0.0 }
+        )
+    }
+}
 
 @Serializable
 enum class ShotEventType {

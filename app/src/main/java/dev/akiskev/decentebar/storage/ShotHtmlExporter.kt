@@ -14,6 +14,11 @@ object ShotHtmlExporter {
     fun export(log: ShotLog): String {
         val title = buildTitle(log)
         val meta = buildMeta(log)
+        val notes = log.tasteNotes ?: log.notes
+        val notesHtml = notes
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "<p class=\"notes\">${escHtml(it)}</p>" }
+            .orEmpty()
         val stageNames = log.samples.map { it.stageName }.distinct()
         val samplesJs = buildSamplesJs(log.samples, stageNames)
         val stageNamesJs = stageNames.joinToString(",") { "\"${escJs(it)}\"" }
@@ -35,6 +40,7 @@ object ShotHtmlExporter {
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#120F0D;color:rgba(252,243,230,0.85);padding:20px;max-width:1100px}
 h1{font-size:1.35em;font-weight:600;color:rgba(252,243,230,0.95);margin-bottom:4px}
 .meta{font-size:.82em;color:rgba(252,243,230,0.50);margin-bottom:20px}
+.notes{font-size:.88em;color:rgba(252,243,230,0.72);margin:-10px 0 20px;max-width:720px}
 .chart-wrap{position:relative;background:rgba(24,19,17,0.88);border-radius:10px;padding:16px 12px 8px;margin-bottom:24px}
 .chart-wrap canvas{display:block;width:100%!important}
 h2{font-size:.8em;font-weight:600;color:rgba(252,243,230,0.55);margin:24px 0 10px;text-transform:uppercase;letter-spacing:.07em}
@@ -52,11 +58,13 @@ tr:hover td{background:rgba(24,19,17,0.50)}
 .b-PRESSURE_COMMAND{background:rgba(176,115,85,0.12);color:#C9A55A}
 .b-STATE_TRANSITION{background:rgba(201,165,90,0.12);color:#E8CE85}
 .b-default{background:rgba(24,19,17,0.60);color:rgba(252,243,230,0.50)}
+footer{margin-top:24px;font-size:.76em;color:rgba(252,243,230,0.36);text-align:right}
 </style>
 </head>
 <body>
 <h1>${escHtml(title)}</h1>
 <p class="meta">${escHtml(meta)}</p>
+$notesHtml
 <div class="chart-wrap"><canvas id="c"></canvas></div>
 <h2>Events</h2>
 <table>
@@ -64,6 +72,7 @@ tr:hover td{background:rgba(24,19,17,0.50)}
 <tbody>
 $eventsRows</tbody>
 </table>
+<footer>Made with Decent E-Bar</footer>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script>
 const S=[$stageNamesJs];
@@ -93,8 +102,14 @@ ${chartScript()}
         }
         log.samples.lastOrNull()?.weightG?.let { parts += "Final weight: ${"%.1f".format(it)}g" }
         log.beansName?.let { parts += "Beans: $it" }
+        log.roastLevel?.let { parts += "Roast: $it" }
         log.grindSetting?.let { parts += "Grind: $it" }
         log.doseG?.let { parts += "Dose: ${"%.1f".format(it)}g" }
+        log.basket?.let { parts += "Basket: $it" }
+        log.rating?.let { parts += "Rating: $it/5" }
+        log.targetYieldG?.let { parts += "Target yield: ${"%.1f".format(it)}g" }
+        log.targetTimeS?.let { parts += "Target time: ${"%.1f".format(it)}s" }
+        if (log.bestForBean) parts += "Best for bean"
         val stageCount = log.samples.map { it.stageName }.distinct().size
         parts += "$stageCount stages · ${log.samples.size} samples · ${log.events.size} events"
         log.flowSource?.let { parts += "Flow: $it" }

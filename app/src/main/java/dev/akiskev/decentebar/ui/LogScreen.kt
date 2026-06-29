@@ -13,21 +13,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,12 +44,8 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
     var pendingLogHtml by remember { mutableStateOf<String?>(null) }
     var pendingFilenameBase by remember { mutableStateOf("") }
 
-    // Save dialog: required shot metadata, pre-filled with the last entry for the session.
+    // Save dialog: required shot metadata, collected by the shared ShotMetadataSaveDialog.
     var showSaveDialog by remember { mutableStateOf(false) }
-    var mdBeans by rememberSaveable { mutableStateOf("") }
-    var mdGrind by rememberSaveable { mutableStateOf("") }
-    var mdDose by rememberSaveable { mutableStateOf("") }
-    var mdNotes by rememberSaveable { mutableStateOf("") }
 
     val saveHtmlLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/html")
@@ -174,13 +165,13 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                     if (state.devMode) {
                         Button(onClick = viewModel::exportShotLog) { Text("Export Log") }
                     }
-                    OutlinedButton(onClick = {
+                    Button(onClick = {
                         if (state.samples.isEmpty() && state.events.isEmpty()) {
                             viewModel.setLogMessage("No shot data to save")
                         } else {
                             showSaveDialog = true
                         }
-                    }) { Text("Save to File") }
+                    }) { Text("Save to Library") }
                     if (state.devMode) {
                         OutlinedButton(onClick = viewModel::resetShotLog) { Text("Clear") }
                     }
@@ -243,6 +234,7 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
                             pendingImportedFilenameBase = base
                             saveImportedJsonLauncher.launch("$base.json")
                         }) { Text("Save to File") }
+                        Button(onClick = viewModel::saveImportedShotToLibrary) { Text("Save to Library") }
                         OutlinedButton(onClick = viewModel::clearImportedShotLog) { Text("Clear") }
                     }
                     Spacer(Modifier.height(4.dp))
@@ -279,65 +271,11 @@ internal fun LogScreen(state: MainUiState, viewModel: MainViewModel) {
     }
 
     if (showSaveDialog) {
-        val dose = mdDose.toDoubleOrNull()
-        val canSave = mdBeans.isNotBlank() && mdGrind.isNotBlank() && dose != null && dose > 0
-        AlertDialog(
-            onDismissRequest = { showSaveDialog = false },
-            title = { Text("Shot details") },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        "Required before saving, so the log is useful for analysis.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = mdBeans, onValueChange = { mdBeans = it },
-                        label = { Text("Beans *") }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = mdGrind, onValueChange = { mdGrind = it },
-                        label = { Text("Grind setting *") }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = mdDose, onValueChange = { mdDose = it },
-                        label = { Text("Dose (g) *") }, singleLine = true,
-                        isError = mdDose.isNotBlank() && dose == null,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = mdNotes, onValueChange = { mdNotes = it },
-                        label = { Text("Notes (optional)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    enabled = canSave,
-                    onClick = {
-                        val metadata = ShotMetadata(mdBeans.trim(), mdGrind.trim(), dose, mdNotes.trim())
-                        val log = viewModel.currentShotLog(metadata)
-                        showSaveDialog = false
-                        if (log == null) {
-                            viewModel.setLogMessage("No shot data to save")
-                            return@TextButton
-                        }
-                        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-                        val base = "${sanitizeFilename(state.selectedProfile.name)}-$ts"
-                        pendingLogJson = ShotLogCodec.encode(log)
-                        pendingLogHtml = ShotHtmlExporter.export(log)
-                        pendingFilenameBase = base
-                        saveLogLauncher.launch("$base.json")
-                    }
-                ) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") }
+        ShotMetadataSaveDialog(
+            onDismiss = { showSaveDialog = false },
+            onSave = { metadata ->
+                showSaveDialog = false
+                viewModel.saveCurrentShotToLibrary(metadata)
             }
         )
     }

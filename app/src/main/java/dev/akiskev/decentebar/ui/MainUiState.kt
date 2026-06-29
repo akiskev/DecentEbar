@@ -1,5 +1,6 @@
 package dev.akiskev.decentebar.ui
 
+import android.net.Uri
 import dev.akiskev.decentebar.ble.ScaleConnectionState
 import dev.akiskev.decentebar.model.ControllerState
 import dev.akiskev.decentebar.model.DefaultProfiles
@@ -7,9 +8,17 @@ import dev.akiskev.decentebar.model.EbarSnapshot
 import dev.akiskev.decentebar.model.LutValidationResult
 import dev.akiskev.decentebar.model.PressureLut
 import dev.akiskev.decentebar.model.ShotEvent
+import dev.akiskev.decentebar.model.ShotLibraryEntry
 import dev.akiskev.decentebar.model.ShotLog
 import dev.akiskev.decentebar.model.ShotProfile
 import dev.akiskev.decentebar.model.ShotSample
+
+data class SharePayload(
+    val uri: Uri,
+    val mimeType: String,
+    val subject: String,
+    val chooserTitle: String = "Share shot"
+)
 
 data class MainUiState(
     val controllerState: ControllerState = ControllerState.IDLE,
@@ -46,6 +55,14 @@ data class MainUiState(
     val scaleBatteryPercent: Int? = null,
     val importedShotLog: ShotLog? = null,
     val importShotLogMessage: String = "",
+    val libraryEntries: List<ShotLibraryEntry> = emptyList(),
+    val selectedLibraryShotId: String? = null,
+    val selectedLibraryShot: ShotLog? = null,
+    val libraryCompareShots: Map<String, ShotLog> = emptyMap(),
+    val libraryMessage: String = "",
+    val pendingShare: SharePayload? = null,
+    /** Set when a finished shot is awaiting the user's "Save to library?" decision. */
+    val librarySavePromptVisible: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** When off, developer-only UI (LUT/Debug tabs, raw JSON I/O, log export tools) is hidden. */
     val devMode: Boolean = false,

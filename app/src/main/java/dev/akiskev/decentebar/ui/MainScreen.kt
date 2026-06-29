@@ -1,5 +1,7 @@
 package dev.akiskev.decentebar.ui
 
+import android.content.ClipData
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.BugReport
@@ -23,6 +26,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -32,6 +36,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -55,16 +61,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 private enum class AppTab(val label: String, val icon: ImageVector) {
     CONTROL("Control", Icons.Default.PlayArrow),
     PROFILE("Profile", Icons.Default.Tune),
+    LIBRARY("Library", Icons.AutoMirrored.Filled.List),
     LUT("LUT", Icons.Default.TableChart),
     DEBUG("Debug", Icons.Default.BugReport),
     LOG("Log", Icons.Default.Assessment),
     ABOUT("About", Icons.Default.Info)
 }
 
-private val AppRailWidth = 76.dp
-private val AppRailIconPillWidth = 52.dp
-private val AppRailIconPillHeight = 32.dp
-private val AppRailItemMinHeight = 62.dp
+private val AppRailWidth = 70.dp
+private val AppRailIconPillWidth = 46.dp
+private val AppRailIconPillHeight = 28.dp
+private val AppRailItemMinHeight = 52.dp
 
 @Composable
 fun MainScreen(
@@ -74,6 +81,7 @@ fun MainScreen(
     disconnectScale: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     var selectedTabName by rememberSaveable { mutableStateOf(AppTab.CONTROL.name) }
     val selectedTab = AppTab.entries.firstOrNull { it.name == selectedTabName } ?: AppTab.CONTROL
@@ -96,17 +104,32 @@ fun MainScreen(
         state.profileMessage,
         state.lutMessage,
         state.logMessage,
-        state.importShotLogMessage
+        state.importShotLogMessage,
+        state.libraryMessage
     ) {
         listOf(
             state.profileMessage,
             state.lutMessage,
             state.logMessage,
-            state.importShotLogMessage
+            state.importShotLogMessage,
+            state.libraryMessage
         )
             .filter { it.isNotBlank() }
             .distinct()
             .forEach { snackbarHostState.showSnackbar(it) }
+    }
+
+    LaunchedEffect(state.pendingShare) {
+        val share = state.pendingShare ?: return@LaunchedEffect
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = share.mimeType
+            putExtra(Intent.EXTRA_STREAM, share.uri)
+            putExtra(Intent.EXTRA_SUBJECT, share.subject)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            clipData = ClipData.newUri(context.contentResolver, share.subject, share.uri)
+        }
+        context.startActivity(Intent.createChooser(intent, share.chooserTitle))
+        viewModel.clearPendingShare()
     }
 
     Scaffold(
@@ -122,45 +145,43 @@ fun MainScreen(
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 contentColor = MaterialTheme.colorScheme.onSurface
             ) {
-                val mainTabs = listOf(AppTab.CONTROL, AppTab.PROFILE, AppTab.LOG)
+                val mainTabs = listOf(AppTab.CONTROL, AppTab.PROFILE, AppTab.LIBRARY, AppTab.LOG)
                 val developerTabs = listOf(AppTab.LUT, AppTab.DEBUG).filter { state.devMode }
+                val railScrollState = rememberScrollState()
+                val railModifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth()
+                    .padding(top = 2.dp, bottom = 2.dp)
+                    .let { base ->
+                        if (developerTabs.isNotEmpty()) base.verticalScroll(railScrollState) else base
+                    }
                 Column(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .padding(top = 8.dp, bottom = 8.dp)
+                    modifier = railModifier,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Top
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState()),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Top
-                    ) {
-                        mainTabs.forEach { tab ->
+                    mainTabs.forEach { tab ->
+                        AppRailItem(
+                            tab = tab,
+                            selected = selectedTab == tab,
+                            onClick = { selectTab(tab) }
+                        )
+                    }
+                    if (developerTabs.isNotEmpty()) {
+                        Text(
+                            "Dev",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 0.dp)
+                        )
+                        developerTabs.forEach { tab ->
                             AppRailItem(
                                 tab = tab,
                                 selected = selectedTab == tab,
                                 onClick = { selectTab(tab) }
                             )
                         }
-                        if (developerTabs.isNotEmpty()) {
-                            Text(
-                                "Dev",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)
-                            )
-                            developerTabs.forEach { tab ->
-                                AppRailItem(
-                                    tab = tab,
-                                    selected = selectedTab == tab,
-                                    onClick = { selectTab(tab) }
-                                )
-                            }
-                        }
                     }
-
                     Box(Modifier.fillMaxWidth()) {
                         RailButton(
                             label = "Support",
@@ -206,6 +227,7 @@ fun MainScreen(
                 when (selectedTab) {
                     AppTab.CONTROL -> ControlScreen(state, viewModel, connectToScale, disconnectScale)
                     AppTab.PROFILE -> ProfileScreen(state, viewModel)
+                    AppTab.LIBRARY -> LibraryScreen(state, viewModel)
                     AppTab.LUT -> LutScreen(state, viewModel)
                     AppTab.DEBUG -> DebugScreen(state)
                     AppTab.LOG -> LogScreen(state, viewModel)
@@ -225,6 +247,36 @@ fun MainScreen(
         FirstUseTutorialDialog(
             onSkip = viewModel::skipTutorial,
             onDone = viewModel::completeTutorial
+        )
+    }
+
+    // Post-shot "Save to library?" prompt. "Yes" opens the metadata form (beans + dose are required
+    // to make a library entry); "No" dismisses. Shown over any tab once a finished shot is awaiting
+    // a decision and the app is back in the foreground.
+    var showSavePromptMetadata by remember { mutableStateOf(false) }
+    if (state.librarySavePromptVisible) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissLibrarySavePrompt,
+            title = { Text("Save to library?") },
+            text = { Text("Your last shot finished. Save it to the Shot Library?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissLibrarySavePrompt()
+                    showSavePromptMetadata = true
+                }) { Text("Yes") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissLibrarySavePrompt) { Text("No") }
+            }
+        )
+    }
+    if (showSavePromptMetadata) {
+        ShotMetadataSaveDialog(
+            onDismiss = { showSavePromptMetadata = false },
+            onSave = { metadata ->
+                showSavePromptMetadata = false
+                viewModel.saveCurrentShotToLibrary(metadata)
+            }
         )
     }
 }
@@ -261,9 +313,9 @@ private fun RailButton(
             .heightIn(min = AppRailItemMinHeight)
             .clickable(onClick = onClick)
             .semantics { this.contentDescription = contentDescription }
-            .padding(vertical = 3.dp),
+            .padding(vertical = 1.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(1.dp)
     ) {
         Box(
             modifier = Modifier
